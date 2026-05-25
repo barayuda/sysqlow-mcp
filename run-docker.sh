@@ -13,6 +13,14 @@ DATA_DIR="$PROJECT_DIR/data"
 ENV_FILE="$PROJECT_DIR/.env"
 CONTAINER_NAME="sysqlow-mcp"
 
+# Dynamically detect parent Projects directory to allow scanning other projects (e.g. migrate-deals-edit/crm-fe-v3)
+HOST_PROJECTS_DIR="/Users/barayuda/Projects"
+if [ -d "$HOST_PROJECTS_DIR" ]; then
+  VOLUME_MOUNT="-v $HOST_PROJECTS_DIR:$HOST_PROJECTS_DIR"
+else
+  VOLUME_MOUNT="-v $PROJECT_DIR:$PROJECT_DIR"
+fi
+
 # Default configuration parameters
 TRANSPORT_MODE="stdio"
 DETACHED_FLAG="-i --rm"
@@ -118,7 +126,7 @@ docker run $DETACHED_FLAG \
   --name "$CONTAINER_NAME" \
   $PORT_MAPPING \
   -v "$DATA_DIR:/app/db" \
-  -v "$PROJECT_DIR:$PROJECT_DIR" \
+  $VOLUME_MOUNT \
   -e TURSO_DATABASE_URL="$TURSO_DATABASE_URL" \
   -e TURSO_AUTH_TOKEN="$TURSO_AUTH_TOKEN" \
   -e GEMINI_API_KEY="$GEMINI_API_KEY" \
