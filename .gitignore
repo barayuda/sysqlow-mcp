@@ -1,0 +1,47 @@
+# ==============================================================================
+# SysQlow-MCP Git Ignore Configuration (Harden & Secure Repo)
+# ==============================================================================
+
+# Sensitive environment variables and secrets (CRITICAL!)
+.env
+.env.*
+*.env
+
+# Local database binaries and replication state (CRITICAL!)
+# SQLite files change constantly and can contain private credentials/notes
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+sysqlow.db*
+
+# Local node dependencies (can be reinstalled via bun install)
+node_modules/
+
+# Compiled distribution/build outputs
+dist/
+
+# OS-specific system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Transient log files
+*-debug.log*
+*-error.log*
+logs/
+*.log
+
+# IDE specific settings
+.vscode/
+.idea/
+.cursor/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln

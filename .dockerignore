@@ -1,0 +1,21 @@
+# Block sensitive environment files containing credentials
+.env
+.env.*
+*.env
+
+# Block local SQLite databases and transient files
+*.db
+*.db-journal
+sysqlow.db
+
+# Block local dependencies and build outputs
+node_modules
+dist
+
+# Block git history and IDE configurations
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+.DS_Store
