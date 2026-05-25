@@ -43,24 +43,48 @@ export const dashboardHtml = `<!DOCTYPE html>
 
   <style>
     body {
+      font-family: 'Inter', sans-serif;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    html.dark body {
       background-color: #080c14;
       background-image: 
         radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.05) 0px, transparent 50%),
         radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.05) 0px, transparent 50%);
-      font-family: 'Inter', sans-serif;
+    }
+
+    html:not(.dark) body {
+      background-color: #f8fafc;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.05) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.03) 0px, transparent 50%);
     }
 
     /* Glassmorphism utility styles */
-    .glass-panel {
+    html.dark .glass-panel {
       background: rgba(13, 20, 35, 0.5);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
       border: 1px solid rgba(255, 255, 255, 0.06);
     }
 
-    .glass-input {
+    html:not(.dark) .glass-panel {
+      background: rgba(248, 250, 252, 0.9);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+    }
+
+    html.dark .glass-input {
       background: rgba(255, 255, 255, 0.03);
       border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    html:not(.dark) .glass-input {
+      background: rgba(15, 23, 42, 0.02);
+      border: 1px solid rgba(15, 23, 42, 0.08);
     }
 
     .glass-input:focus {
@@ -99,26 +123,40 @@ export const dashboardHtml = `<!DOCTYPE html>
     }
   </style>
 </head>
-<body class="text-slate-100 min-h-screen overflow-hidden flex flex-col font-sans">
+<body class="text-slate-800 dark:text-slate-100 h-screen overflow-hidden flex flex-col font-sans">
 
   <!-- Header -->
-  <header class="glass-panel border-b px-6 py-4 flex items-center justify-between z-20">
+  <header class="glass-panel border-b border-slate-500/10 dark:border-white/5 px-6 py-4 flex items-center justify-between z-20">
     <div class="flex items-center space-x-3">
       <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-brand-500 to-blue-500 flex items-center justify-center font-outfit font-bold text-xl text-white shadow-lg neon-glow">
         S
       </div>
       <div>
-        <h1 class="font-outfit font-bold text-lg tracking-wide leading-tight">System Query Flow</h1>
-        <p class="text-xs text-slate-400 font-medium">SysQlow-MCP • Knowledge Graph Dashboard</p>
+        <h1 class="font-outfit font-bold text-lg tracking-wide leading-tight text-slate-800 dark:text-slate-100">System Query Flow</h1>
+        <p class="text-xs text-slate-500 dark:text-slate-400 font-medium">SysQlow-MCP • Knowledge Graph Dashboard</p>
       </div>
     </div>
     <div class="flex items-center space-x-4">
-      <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+      <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
         Container SSE Port 50741 Active
       </span>
-      <button onclick="refreshData()" class="px-3.5 py-1.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 transition text-sm font-medium flex items-center space-x-2">
-        <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.253 8H18"></path></svg>
+      
+      <!-- Theme Selection Segmented Toggle -->
+      <div class="flex items-center bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 rounded-xl p-0.5 space-x-0.5">
+        <button id="theme-btn-light" onclick="setTheme('light')" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition" title="Light Mode">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m0-12.728l.707.707m12.728 12.728l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"></path></svg>
+        </button>
+        <button id="theme-btn-dark" onclick="setTheme('dark')" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition" title="Dark Mode">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+        </button>
+        <button id="theme-btn-system" onclick="setTheme('system')" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition" title="System Mode">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+        </button>
+      </div>
+
+      <button onclick="refreshData()" class="px-3.5 py-1.5 rounded-lg bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 hover:bg-slate-500/10 dark:hover:bg-white/10 transition text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center space-x-2">
+        <svg class="w-4 h-4 text-slate-500 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.253 8H18"></path></svg>
         <span>Refresh</span>
       </button>
     </div>
@@ -129,14 +167,14 @@ export const dashboardHtml = `<!DOCTYPE html>
     
     <!-- Left: Graph Panel -->
     <section class="flex-1 flex flex-col glass-panel rounded-2xl overflow-hidden relative neon-glow">
-      <div class="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+      <div class="px-5 py-4 border-b border-slate-500/10 dark:border-white/5 flex items-center justify-between">
         <div class="flex items-center space-x-2.5">
           <span class="text-brand-500">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
           </span>
-          <h2 class="font-outfit font-semibold text-base">Knowledge Graph Relations</h2>
+          <h2 class="font-outfit font-semibold text-base text-slate-800 dark:text-slate-100">Knowledge Graph Relations</h2>
         </div>
-        <div class="flex items-center space-x-4 text-xs text-slate-400">
+        <div class="flex items-center space-x-4 text-xs text-slate-500 dark:text-slate-400">
           <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 mr-1.5"></span> Validated</span>
           <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 mr-1.5"></span> Outdated / Pending</span>
           <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-blue-500 mr-1.5"></span> Project Context</span>
@@ -147,11 +185,17 @@ export const dashboardHtml = `<!DOCTYPE html>
       <div id="mynetwork" class="flex-1 w-full h-full cursor-grab active:cursor-grabbing"></div>
       
       <!-- Legend/Control Overlay -->
-      <div class="absolute bottom-4 left-4 p-3 rounded-lg glass-panel text-[11px] text-slate-400 max-w-xs space-y-1">
-        <p class="font-bold text-slate-200">Interactive Controls:</p>
-        <p>• Drag nodes to manually arrange</p>
-        <p>• Scroll to zoom in/out</p>
-        <p>• Click any node to open details & trigger Sentinel</p>
+      <div class="absolute bottom-4 left-4 p-4 rounded-xl glass-panel text-[11px] text-slate-500 dark:text-slate-400 max-w-xs space-y-2.5 neon-glow">
+        <div>
+          <p class="font-bold text-slate-700 dark:text-slate-200">Interactive Controls:</p>
+          <p>• Drag nodes to manually arrange</p>
+          <p>• Scroll to zoom in/out</p>
+          <p>• Click any node to open details</p>
+        </div>
+        <button onclick="centerGraph()" class="w-full py-1.5 px-3 rounded-lg bg-brand-500/10 border border-brand-500/20 hover:bg-brand-500/20 active:bg-brand-500/30 transition text-brand-400 font-semibold flex items-center justify-center space-x-1.5 text-[10px]">
+          <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+          <span>Recenter & Fit View</span>
+        </button>
       </div>
     </section>
 
@@ -159,13 +203,13 @@ export const dashboardHtml = `<!DOCTYPE html>
     <section class="w-[450px] flex flex-col gap-6 overflow-hidden">
       
       <!-- Top: Live MCP Logs Terminal -->
-      <article class="flex-1 flex flex-col glass-panel rounded-2xl overflow-hidden max-h-[50%]">
-        <div class="px-5 py-3 border-b border-white/5 flex items-center justify-between">
+      <article class="flex-1 min-h-0 flex flex-col glass-panel rounded-2xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-500/10 dark:border-white/5 flex items-center justify-between">
           <div class="flex items-center space-x-2">
             <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-            <h3 class="font-outfit font-semibold text-sm">Real-time MCP Log Terminal</h3>
+            <h3 class="font-outfit font-semibold text-sm text-slate-800 dark:text-slate-100">Real-time MCP Log Terminal</h3>
           </div>
-          <button onclick="fetchLogs()" class="text-xs text-slate-400 hover:text-white transition">Clear & Poll</button>
+          <button onclick="fetchLogs()" class="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition">Clear & Poll</button>
         </div>
         <!-- Terminal Body -->
         <div id="terminal" class="flex-1 p-4 font-mono text-[11px] leading-relaxed overflow-y-auto bg-[#05080f] text-slate-300 space-y-1">
@@ -174,9 +218,9 @@ export const dashboardHtml = `<!DOCTYPE html>
       </article>
 
       <!-- Bottom: Env Configurations -->
-      <article class="flex-1 flex flex-col glass-panel rounded-2xl overflow-hidden max-h-[50%]">
-        <div class="px-5 py-3 border-b border-white/5">
-          <h3 class="font-outfit font-semibold text-sm">Container Environment Variables</h3>
+      <article class="flex-1 min-h-0 flex flex-col glass-panel rounded-2xl overflow-hidden">
+        <div class="px-5 py-3 border-b border-slate-500/10 dark:border-white/5">
+          <h3 class="font-outfit font-semibold text-sm text-slate-800 dark:text-slate-100">Container Environment Variables</h3>
         </div>
         <!-- Variables List -->
         <div id="env-list" class="flex-1 overflow-y-auto p-4 space-y-2 text-xs">
@@ -187,11 +231,11 @@ export const dashboardHtml = `<!DOCTYPE html>
     </section>
 
     <!-- Sliding Sidebar Details Panel -->
-    <section id="sidebar" class="absolute top-0 right-0 h-full w-[480px] glass-panel border-l shadow-2xl z-30 transform translate-x-full transition-transform duration-300 flex flex-col">
+    <section id="sidebar" class="absolute top-0 right-0 h-full w-[480px] glass-panel border-l border-slate-500/10 dark:border-white/5 shadow-2xl z-30 transform translate-x-full transition-transform duration-300 flex flex-col">
       <!-- Sidebar Header -->
-      <div class="p-6 border-b border-white/5 flex items-center justify-between">
-        <h2 id="side-topic" class="font-outfit font-bold text-base text-slate-100 pr-4 truncate">Snippet Details</h2>
-        <button onclick="closeSidebar()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition">
+      <div class="p-6 border-b border-slate-500/10 dark:border-white/5 flex items-center justify-between">
+        <h2 id="side-topic" class="font-outfit font-bold text-base text-slate-800 dark:text-slate-100 pr-4 truncate">Snippet Details</h2>
+        <button onclick="closeSidebar()" class="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white p-1 rounded-lg hover:bg-slate-500/10 dark:hover:bg-white/5 transition">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
       </div>
@@ -201,34 +245,34 @@ export const dashboardHtml = `<!DOCTYPE html>
         
         <!-- Metadata Badges Grid -->
         <div class="grid grid-cols-2 gap-4 text-xs">
-          <div class="p-3.5 rounded-xl bg-white/5 border border-white/5">
-            <span class="text-slate-400 block mb-0.5">Category</span>
-            <span id="side-category" class="font-semibold text-slate-200">None</span>
+          <div class="p-3.5 rounded-xl bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10">
+            <span class="text-slate-500 dark:text-slate-400 block mb-0.5">Category</span>
+            <span id="side-category" class="font-semibold text-slate-700 dark:text-slate-200">None</span>
           </div>
-          <div class="p-3.5 rounded-xl bg-white/5 border border-white/5">
-            <span class="text-slate-400 block mb-0.5">Validation Rating</span>
-            <span id="side-confidence" class="font-semibold text-slate-200">0 / 10</span>
+          <div class="p-3.5 rounded-xl bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10">
+            <span class="text-slate-500 dark:text-slate-400 block mb-0.5">Validation Rating</span>
+            <span id="side-confidence" class="font-semibold text-slate-700 dark:text-slate-200">0 / 10</span>
           </div>
-          <div class="p-3.5 rounded-xl bg-white/5 border border-white/5 col-span-2">
-            <span class="text-slate-400 block mb-0.5">Validation Status</span>
+          <div class="p-3.5 rounded-xl bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 col-span-2">
+            <span class="text-slate-500 dark:text-slate-400 block mb-0.5">Validation Status</span>
             <div class="flex items-center space-x-2 mt-1">
               <span id="side-status-indicator" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
-              <span id="side-status-text" class="font-bold uppercase tracking-wider text-[10px]">Unvalidated</span>
+              <span id="side-status-text" class="font-bold uppercase tracking-wider text-[10px] text-slate-700 dark:text-slate-200">Unvalidated</span>
             </div>
           </div>
         </div>
 
         <!-- Code/Content Snippet -->
         <div class="space-y-2">
-          <span class="text-xs text-slate-400 block font-medium">Stored Knowledge Snippet</span>
-          <pre id="side-content" class="p-4 rounded-xl bg-[#05080f] border border-white/5 font-mono text-[11px] leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[300px] text-slate-200"></pre>
+          <span class="text-xs text-slate-500 dark:text-slate-400 block font-medium">Stored Knowledge Snippet</span>
+          <pre id="side-content" class="p-4 rounded-xl bg-[#05080f] border border-slate-500/10 dark:border-white/5 font-mono text-[11px] leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[300px] text-slate-200"></pre>
         </div>
 
         <!-- Validation Controls -->
         <div class="p-5 rounded-2xl bg-brand-500/5 border border-brand-500/10 space-y-4">
           <div>
-            <h4 class="text-xs font-semibold text-slate-200">Sentinel Validation Controls</h4>
-            <p class="text-[11px] text-slate-400 mt-1 leading-normal">Cross-references this stored snippet against the latest live web documentation using Gemini API.</p>
+            <h4 class="text-xs font-semibold text-slate-800 dark:text-slate-200">Sentinel Validation Controls</h4>
+            <p class="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-normal">Cross-references this stored snippet against the latest live web documentation using Gemini API.</p>
           </div>
           <button id="validate-btn" onclick="runValidation()" class="w-full py-2.5 px-4 bg-brand-500 hover:bg-brand-600 active:bg-brand-700 transition rounded-xl font-semibold text-xs flex items-center justify-center space-x-2 text-white">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
@@ -237,13 +281,13 @@ export const dashboardHtml = `<!DOCTYPE html>
         </div>
 
         <!-- Live Audit Report Container (Hidden until validate) -->
-        <div id="report-container" class="hidden space-y-3 p-4 rounded-xl bg-white/5 border border-white/5">
-          <h4 class="text-xs font-bold text-slate-200">Validation Report Output</h4>
+        <div id="report-container" class="hidden space-y-3 p-4 rounded-xl bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10">
+          <h4 class="text-xs font-bold text-slate-800 dark:text-slate-200">Validation Report Output</h4>
           <div class="text-[11px] space-y-2 leading-relaxed">
             <p id="report-source" class="text-brand-500 truncate"></p>
-            <p id="report-reasoning" class="text-slate-400"></p>
+            <p id="report-reasoning" class="text-slate-600 dark:text-slate-400"></p>
             <div id="report-diff-box" class="hidden">
-              <span class="text-slate-400 block mb-1">Suggested Update Diff:</span>
+              <span class="text-slate-500 dark:text-slate-400 block mb-1">Suggested Update Diff:</span>
               <pre id="report-diff" class="p-3 rounded-lg bg-black text-red-400 font-mono text-[10px] leading-relaxed overflow-x-auto whitespace-pre-wrap border border-white/5"></pre>
             </div>
           </div>
@@ -259,8 +303,51 @@ export const dashboardHtml = `<!DOCTYPE html>
     let network = null;
     let selectedNodeId = null;
 
+    // Theme Switcher core logic
+    function setTheme(theme) {
+      localStorage.setItem('theme', theme);
+      
+      const root = document.documentElement;
+      let isDark = theme === 'dark';
+      
+      if (theme === 'system') {
+        isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      }
+      
+      if (isDark) {
+        root.classList.add('dark');
+      } else {
+        root.classList.remove('dark');
+      }
+      
+      // Highlight the selected segment tab with premium active styles
+      ['light', 'dark', 'system'].forEach(t => {
+        const btn = document.getElementById(\`theme-btn-\${t}\`);
+        if (t === theme) {
+          btn.className = "p-1.5 rounded-lg bg-brand-500/10 dark:bg-brand-500/20 text-brand-500 border border-brand-500/30 transition shadow-sm scale-105";
+        } else {
+          btn.className = "p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white border border-transparent transition";
+        }
+      });
+
+      // Redraw the graph so edge and text labels pick up the theme-appropriate contrast colors
+      if (network) {
+        refreshData();
+      }
+    }
+
     // A. Main Initialization
     document.addEventListener("DOMContentLoaded", () => {
+      const savedTheme = localStorage.getItem('theme') || 'system';
+      setTheme(savedTheme);
+      
+      // Live system preference change listener
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+        if (localStorage.getItem('theme') === 'system') {
+          setTheme('system');
+        }
+      });
+
       refreshData();
       fetchLogs();
       fetchEnv();
@@ -292,7 +379,11 @@ export const dashboardHtml = `<!DOCTYPE html>
               border: "#1e293b",
               highlight: {
                 background: color,
-                border: "#f8fafc"
+                border: "#10b981"
+              },
+              hover: {
+                background: color,
+                border: "#10b981"
               }
             },
             font: {
@@ -313,6 +404,12 @@ export const dashboardHtml = `<!DOCTYPE html>
           };
         });
 
+        // Dynamic edge colors matching the light/dark background contrast
+        const isDark = document.documentElement.classList.contains("dark");
+        const categoryEdgeColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(15, 23, 42, 0.08)";
+        const mentionsEdgeColor = isDark ? "rgba(16, 185, 129, 0.4)" : "rgba(16, 185, 129, 0.6)";
+        const labelFontColor = isDark ? "rgba(255,255,255,0.4)" : "rgba(15, 23, 42, 0.5)";
+
         // Structure edges
         const visEdges = data.edges.map(e => {
           const isCategory = e.label === "Same Category";
@@ -322,12 +419,12 @@ export const dashboardHtml = `<!DOCTYPE html>
             arrows: e.arrows || undefined,
             dashes: isCategory,
             color: {
-              color: isCategory ? "rgba(255,255,255,0.08)" : "rgba(16, 185, 129, 0.4)",
+              color: isCategory ? categoryEdgeColor : mentionsEdgeColor,
               highlight: "#10b981"
             },
             label: isCategory ? "" : e.label,
             font: {
-              color: "rgba(255,255,255,0.4)",
+              color: labelFontColor,
               size: 8,
               face: "Inter"
             },
@@ -361,6 +458,11 @@ export const dashboardHtml = `<!DOCTYPE html>
         
         network = new vis.Network(container, networkData, options);
 
+        // Auto-center and fit the graph layout as soon as physics stabilization is complete
+        network.once("stabilized", () => {
+          centerGraph();
+        });
+
         // Bind node click listener
         network.on("click", (params) => {
           if (params.nodes.length > 0) {
@@ -374,6 +476,18 @@ export const dashboardHtml = `<!DOCTYPE html>
 
       } catch (err) {
         console.error("Failed to load graph data:", err);
+      }
+    }
+
+    // Centering helper with premium animated transition
+    function centerGraph() {
+      if (network) {
+        network.fit({
+          animation: {
+            duration: 800,
+            easingFunction: "easeInOutQuad"
+          }
+        });
       }
     }
 
