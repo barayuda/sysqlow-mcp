@@ -18,13 +18,13 @@ TRANSPORT_MODE="stdio"
 DETACHED_FLAG="-i --rm"
 PORT_MAPPING=""
 MCP_TRANSPORT="stdio"
-PORT="32768"
+PORT="50741"
 
 # Check for transport mode arguments (--sse or -s)
 if [ "$1" == "--sse" ] || [ "$1" == "-s" ]; then
   TRANSPORT_MODE="sse"
   DETACHED_FLAG="-d --rm"
-  PORT_MAPPING="-p 32768:32768"
+  PORT_MAPPING="-p 50741:50741"
   MCP_TRANSPORT="sse"
 fi
 
@@ -93,7 +93,8 @@ echo "🚀 Running SysQlow-MCP in Containerized Mode..."
 echo "📊 Persistent Volume: $DATA_DIR"
 echo "📛 Container Name: $CONTAINER_NAME"
 if [ "$TRANSPORT_MODE" == "sse" ]; then
-  echo "🌐 SSE URL Endpoint: http://localhost:32768/sse"
+  echo "🌐 SSE URL Endpoint: http://localhost:50741/sse"
+  echo "🖥️  Web Admin Dashboard: http://localhost:50741/"
 fi
 echo "=========================================================="
 

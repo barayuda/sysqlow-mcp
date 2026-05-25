@@ -3,6 +3,33 @@ import { z } from "zod";
 import { initDatabase, client, isEmbeddedReplica } from "./db";
 import { validateKnowledgeItem } from "./sentinel";
 import { learnCodebase } from "./learn";
+import { dashboardHtml } from "./dashboard-html";
+
+// 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
+export const logsRingBuffer: string[] = [];
+const maxLogs = 200;
+
+const originalLog = console.log;
+const originalError = console.error;
+
+const addToBuffer = (type: "info" | "error", args: any[]) => {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] [${type.toUpperCase()}] ${args.map(a => typeof a === "object" ? JSON.stringify(a) : a).join(" ")}`;
+  logsRingBuffer.push(line);
+  if (logsRingBuffer.length > maxLogs) {
+    logsRingBuffer.shift();
+  }
+};
+
+console.log = (...args: any[]) => {
+  addToBuffer("info", args);
+  originalLog(...args);
+};
+
+console.error = (...args: any[]) => {
+  addToBuffer("error", args);
+  originalError(...args);
+};
 
 // 1. Initialize the database schema
 try {
@@ -329,10 +356,116 @@ server.on("connect", ({ session }) => {
   });
 });
 
+// Get Hono instance
+const app = server.getApp();
+
+// 1. Dashboard Web UI Route
+app.get("/", async (c) => {
+  return c.html(dashboardHtml);
+});
+
+// 2. Knowledge Graph Entities API
+app.get("/api/graph", async (c) => {
+  try {
+    const res = await client.execute({
+      sql: `SELECT id, topic, content, category, is_validated, confidence_score, last_validated_at, source_url 
+            FROM technical_knowledge`,
+      args: []
+    });
+    
+    const nodes = res.rows.map((r: any) => ({
+      id: r.id,
+      label: r.topic,
+      category: r.category || "None",
+      validated: r.is_validated,
+      confidence: r.confidence_score,
+      last_validated: r.last_validated_at,
+      source_url: r.source_url,
+      content: r.content
+    }));
+
+    const edges: any[] = [];
+    
+    // Build edges dynamically
+    for (let i = 0; i < nodes.length; i++) {
+      const nodeA = nodes[i];
+      
+      for (let j = i + 1; j < nodes.length; j++) {
+        const nodeB = nodes[j];
+        
+        // Connect nodes sharing the same category
+        if (nodeA.category && nodeA.category !== "None" && nodeA.category === nodeB.category) {
+          edges.push({
+            from: nodeA.id,
+            to: nodeB.id,
+            label: "Same Category",
+            arrows: undefined
+          });
+        }
+      }
+      
+      // Directed reference connection if snippet content mentions another topic
+      for (let j = 0; j < nodes.length; j++) {
+        const nodeB = nodes[j];
+        if (nodeA.id === nodeB.id) continue;
+        
+        // Escape special chars in regex
+        const escapedLabel = nodeB.label.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+        const topicRegex = new RegExp(escapedLabel, 'i');
+        if (topicRegex.test(nodeA.content)) {
+          edges.push({
+            from: nodeA.id,
+            to: nodeB.id,
+            label: "Mentions",
+            arrows: "to"
+          });
+        }
+      }
+    }
+
+    return c.json({ nodes, edges });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// 3. Manual Validation Trigger
+app.post("/api/validate/:id", async (c) => {
+  const id = c.req.param("id");
+  try {
+    const report = await validateKnowledgeItem(id);
+    return c.json({ status: "success", report });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
+});
+
+// 4. Console Log Terminal Stream
+app.get("/api/logs", async (c) => {
+  return c.json({ logs: logsRingBuffer });
+});
+
+// 5. Redacted Environment Configuration Listing
+app.get("/api/env", async (c) => {
+  const redactedEnv: Record<string, string> = {};
+  const keysToRedact = ["KEY", "TOKEN", "SECRET", "PASS", "CREDENTIAL"];
+  
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!val) continue;
+    const needsRedaction = keysToRedact.some(k => key.toUpperCase().includes(k));
+    if (needsRedaction) {
+      redactedEnv[key] = val.substring(0, Math.min(6, val.length)) + "... [REDACTED]";
+    } else {
+      redactedEnv[key] = val;
+    }
+  }
+  return c.json({ env: redactedEnv });
+});
+
 // Start the server using the configured transport mode
 // If MCP_TRANSPORT is set to "sse", it boots as an HTTP/SSE server. Otherwise, it defaults to stdio.
 const transportMode = process.env.MCP_TRANSPORT === "sse" ? "httpStream" : "stdio";
-const port = parseInt(process.env.PORT || "3000", 10);
+const port = parseInt(process.env.PORT || "50741", 10);
 
 if (transportMode === "httpStream") {
   console.error(`Starting SysQlow-MCP server on SSE/HTTP transport (port ${port})...`);

@@ -171,17 +171,35 @@ BRAVE_API_KEY="your-brave-key" # Optional (falls back to DDG scraper)
 
 ---
 
-## 🐳 Running with Docker (Persistent Setup)
+## 🐳 Running with Docker (SSE & Dashboard Setup)
 
-We provide an automated pipeline that runs the server in SSE transport mode, exposing a network port to communicate with Cursor or VS Code.
+We provide an automated pipeline that runs the server in SSE transport mode, exposing port **`50741`** to serve both the MCP client connection and the web admin dashboard.
 
 ### Run in One Command:
-Simply execute the included bash script to clean, rebuild, and start the container:
+Simply execute the included bash script to clean, rebuild, and start the container in detached mode:
 ```bash
 ./run-docker.sh --sse
 ```
 
-This binds port `32768` on your local machine to the SSE transport inside the container, directing database replica files securely to the mounted `data/` directory.
+This binds port **`50741`** on your local machine to the container, directing database replica files securely to the mounted `data/` directory.
+
+---
+
+## 🖥️ Interactive Web Admin & Knowledge Graph Dashboard
+
+Once the server is running in SSE mode, open your browser and visit:
+👉 **`http://localhost:50741/`**
+
+### Key Features of the Dashboard:
+1. **Interactive Entity-Relation Knowledge Graph:** Draggable, physics-directed 2D nodes powered by **Vis.js Network**.
+   * **Emerald nodes:** Validated technical snippets.
+   * **Amber nodes:** Outdated/pending snippets.
+   * **Blue nodes:** Automated `Project Context` snippets.
+   * **Dashed links:** Category matching connections.
+   * **Solid directed arrows:** Automatic keyword/mention references discovered in content text.
+2. **Sentinel Manual Audit Controls:** Click any node to open the glassmorphic detail sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
+3. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server warnings, info, and auto-hook operations.
+4. **Environment Configuration Viewer:** Displays all injected container configurations, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
 
 ---
 
@@ -194,6 +212,8 @@ You can compile SysQlow-MCP into a **single standalone native executable binary*
 bun run compile
 ```
 
+---
+
 ## 🖥️ IDE Integration Configurations
 
 To integrate **System Query Flow** as a developer companion in your workspace:
@@ -203,7 +223,7 @@ To integrate **System Query Flow** as a developer companion in your workspace:
 2. Open **Manage MCP servers** in Antigravity-IDE, click **"View raw config"**, and add:
    ```json
    "sysqlow-mcp": {
-     "serverURL": "http://localhost:32768/sse"
+     "serverURL": "http://localhost:50741/sse"
    }
    ```
    > [!NOTE]

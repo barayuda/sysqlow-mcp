@@ -20,7 +20,7 @@ ENV LOCAL_DB_PATH="/app/db/sysqlow.db"
 ENV TURSO_DATABASE_URL="file:/app/db/sysqlow.db"
 
 # Expose the port used by the Server-Sent Events (SSE) HTTP transport
-EXPOSE 32768
+EXPOSE 50741
 
 # The standard I/O transport is used by MCP, which communicates over stdin/stdout
 CMD ["bun", "run", "dist/index.js"]
