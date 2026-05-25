@@ -197,9 +197,16 @@ Once the server is running in SSE mode, open your browser and visit:
    * **Blue nodes:** Automated `Project Context` snippets.
    * **Dashed links:** Category matching connections.
    * **Solid directed arrows:** Automatic keyword/mention references discovered in content text.
-2. **Sentinel Manual Audit Controls:** Click any node to open the glassmorphic detail sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
-3. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server warnings, info, and auto-hook operations.
-4. **Environment Configuration Viewer:** Displays all injected container configurations, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
+2. **Dynamic Centering & Recenter View:**
+   * **Auto-Centering:** The graph automatically triggers a premium animated transition to center and fit the nodes inside the viewport as soon as the physics simulation finishes stabilizing.
+   * **Recenter Button:** A glassmorphic button in the bottom-left legend panel ("Recenter & Fit View") executes an on-demand `.fit()` using a smooth `easeInOutQuad` zoom and pan curve lasting `800ms`.
+3. **Multi-Mode Theme Selector (Dark, Light, System Mode):**
+   * **Segmented Toggle Bar:** A glassmorphic theme selector inside the header allows you to seamlessly switch between Light, Dark, and System-synced modes (which actively tracks and responds to OS-level color scheme changes in real-time).
+   * **Saved Preferences:** Appearance settings are persisted inside `localStorage` across refreshes and restarts.
+   * **Dynamic Canvas Contrast Adaptions:** Swapping themes automatically recalibrates Vis.js canvas render colors (drawing high-contrast dark-slate edges and text labels in Light Mode, and glowing semi-transparent white elements in Dark Mode) to prevent edge washout or readability degradation.
+4. **Sentinel Manual Audit Controls:** Click any node to open the dense, high-contrast details sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
+5. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server operations, automatically classifying standard startup and database sync status traces as green `[INFO]` logs instead of errors.
+6. **Environment Configuration Viewer:** Displays all active environment variables inside a mathematically precise 50/50 vertical partition matching the log terminal height, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
 
 ---
 
