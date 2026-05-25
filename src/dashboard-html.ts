@@ -505,13 +505,13 @@ export const dashboardHtml = `<!DOCTYPE html>
         const items = Object.entries(data.env).map(([key, val]) => {
           return \`
             <div class="p-2.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between">
-              <span class="font-mono text-slate-400 font-semibold truncate pr-4 text-[10px]">\\\${key}</span>
-              <span class="font-mono text-[10px] text-slate-200 truncate bg-slate-900 px-2 py-1 rounded max-w-[200px]" title="\\\${val}">\\\${val}</span>
+              <span class="font-mono text-slate-400 font-semibold truncate pr-4 text-[10px]">\${key}</span>
+              <span class="font-mono text-[10px] text-slate-200 truncate bg-slate-900 px-2 py-1 rounded max-w-[200px]" title="\${val}">\${val}</span>
             </div>
           \`;
         }).join("");
  
-        container.innerHTML = \`<div class="grid grid-cols-1 gap-2">\\\${items}</div>\`;
+        container.innerHTML = \`<div class="grid grid-cols-1 gap-2">\${items}</div>\`;
 
       } catch (err) {
         console.error("Failed to read env configuration:", err);

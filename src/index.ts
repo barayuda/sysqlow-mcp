@@ -27,7 +27,16 @@ console.log = (...args: any[]) => {
 };
 
 console.error = (...args: any[]) => {
-  addToBuffer("error", args);
+  const logStr = args.map(a => typeof a === "object" ? JSON.stringify(a) : String(a)).join(" ").toLowerCase();
+  
+  // Smart heuristic: FastMCP/LibSQL outputs startup and diagnostic information to stderr.
+  // We classify it as info if it contains standard status keywords and no actual error terms.
+  const hasErrorKeywords = ["error", "fail", "exception", "warn", "lock", "conflict"].some(kw => logStr.includes(kw));
+  const hasStatusKeywords = ["start", "listen", "run", "sync", "replica", "schema", "init", "success", "connect", "check"].some(kw => logStr.includes(kw));
+  
+  const type = (!hasErrorKeywords && hasStatusKeywords) ? "info" : "error";
+  
+  addToBuffer(type, args);
   originalError(...args);
 };
 
