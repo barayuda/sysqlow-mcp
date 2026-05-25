@@ -92,11 +92,52 @@ IMPORTANT: Since you are returning a JSON object, all backslashes (\\) in string
   throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
 }
 
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 3,
+  initialDelay = 1000
+): Promise<Response> {
+  let retries = 0;
+  while (true) {
+    try {
+      const res = await fetch(url, options);
+      if (res.ok) {
+        return res;
+      }
+      
+      const isTransient = [429, 500, 502, 503, 504].includes(res.status);
+      if (isTransient && retries < maxRetries) {
+        retries++;
+        const delay = initialDelay * Math.pow(2, retries - 1);
+        console.error(
+          `[SysQlow LLM] Transient HTTP status ${res.status} from endpoint. Retrying attempt ${retries}/${maxRetries} in ${delay}ms...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      
+      return res;
+    } catch (error: any) {
+      if (retries < maxRetries) {
+        retries++;
+        const delay = initialDelay * Math.pow(2, retries - 1);
+        console.error(
+          `[SysQlow LLM] Fetch network error: ${error.message || error}. Retrying attempt ${retries}/${maxRetries} in ${delay}ms...`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 async function runGeminiJSONGeneric<T>(prompt: string, apiKey: string): Promise<T> {
   const model = "gemini-2.5-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
   
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -129,7 +170,7 @@ async function runGeminiJSONGeneric<T>(prompt: string, apiKey: string): Promise<
 async function runOpenAIJSONGeneric<T>(prompt: string, apiKey: string): Promise<T> {
   const url = "https://api.openai.com/v1/chat/completions";
   
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -214,7 +255,7 @@ IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces)
 async function embedGemini(text: string, apiKey: string): Promise<number[]> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`;
   
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -234,7 +275,7 @@ async function embedGemini(text: string, apiKey: string): Promise<number[]> {
 async function embedOpenAI(text: string, apiKey: string): Promise<number[]> {
   const url = "https://api.openai.com/v1/embeddings";
   
-  const res = await fetch(url, {
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

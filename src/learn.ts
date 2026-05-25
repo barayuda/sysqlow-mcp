@@ -11,7 +11,24 @@ export interface CodebaseAnalysisResult {
 
 export async function learnCodebase(projectPath: string): Promise<CodebaseAnalysisResult> {
   if (!existsSync(projectPath)) {
-    throw new Error(`Project path "${projectPath}" does not exist.`);
+    console.error(`[SysQlow Warn] Project path "${projectPath}" does not exist inside the server filesystem.`);
+    
+    // Check if we are running in a Docker container
+    const isDocker = existsSync("/.dockerenv") || existsSync("/proc/1/cgroup") && readFileSync("/proc/1/cgroup", "utf8").includes("docker");
+    if (isDocker) {
+      console.error(
+        `[SysQlow Info] Server is running within a Docker container. The client's host path "${projectPath}" is isolated and not mounted inside this container.\n` +
+        `To automatically scan your codebase, either:\n` +
+        `  1. Bind-mount your project folder into the Docker run command (e.g. -v /Users/...:/Users/...)\n` +
+        `  2. Run the MCP server natively on your host machine using Bun in SSE transport mode.`
+      );
+    }
+    
+    return {
+      projectName: basename(projectPath) || "Current Project",
+      detectedFiles: [],
+      snippets: []
+    };
   }
 
   const filesInRoot = readdirSync(projectPath);

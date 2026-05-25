@@ -318,22 +318,27 @@ ${snippetsSummary}`;
 
 // Helper to run auto-scanning for a session's workspace roots
 const triggerAutoScan = async (session: any) => {
-  console.error("[SysQlow Info] Client session active. Checking workspace roots...");
-  try {
-    const roots = session.roots;
-    if (roots && roots.length > 0) {
-      // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
-      const rootPath = roots[0].uri.replace(/^file:\/\//, "");
-      console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
-      
-      await learnCodebase(rootPath);
-      console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
-    } else {
-      console.error("[SysQlow Info] No workspace roots are currently open in the client.");
+  console.error("[SysQlow Info] Client session active. Scheduling workspace roots check...");
+  
+  // A 1000ms delay ensures client-server handshake is fully established 
+  // and prevents early JSON-RPC roots/list timeouts (e.g. MCP error -32001)
+  setTimeout(async () => {
+    try {
+      const roots = session.roots;
+      if (roots && roots.length > 0) {
+        // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
+        const rootPath = roots[0].uri.replace(/^file:\/\//, "");
+        console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
+        
+        await learnCodebase(rootPath);
+        console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
+      } else {
+        console.error("[SysQlow Info] No workspace roots are currently open or active in the client session.");
+      }
+    } catch (err: any) {
+      console.error(`[SysQlow Warn] Failed to automatically learn codebase: ${err.message}`);
     }
-  } catch (err: any) {
-    console.error(`[SysQlow Warn] Failed to automatically learn codebase: ${err.message}`);
-  }
+  }, 1000);
 };
 
 // Auto-Hook: Listens for incoming client sessions and triggers automated learning on startup
