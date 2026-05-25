@@ -7,18 +7,26 @@
 # Exit immediately if any command fails
 set -e
 
-# Define paths relative to the project root
-PROJECT_DIR="/Users/barayuda/Projects/personal/sysqlow-mcp"
+# ---------------------------------------------------------
+# Dynamic Paths Resolution for Cross-Machine Compatibility
+# ---------------------------------------------------------
+# Resolve project directory dynamically (works on any machine)
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$PROJECT_DIR/data"
 ENV_FILE="$PROJECT_DIR/.env"
 CONTAINER_NAME="sysqlow-mcp"
 
-# Dynamically detect parent Projects directory to allow scanning other projects (e.g. migrate-deals-edit/crm-fe-v3)
-HOST_PROJECTS_DIR="/Users/barayuda/Projects"
-if [ -d "$HOST_PROJECTS_DIR" ]; then
-  VOLUME_MOUNT="-v $HOST_PROJECTS_DIR:$HOST_PROJECTS_DIR"
+# Dynamically mount parent directories to allow scanning multi-workspaces inside Docker.
+# If the project is within the user's HOME directory, we mount the entire HOME folder
+# to ensure absolute path parity for all projects. Otherwise, we mount the parent of the project.
+VOLUME_MOUNT="-v $PROJECT_DIR:$PROJECT_DIR"
+if [[ "$PROJECT_DIR" == "$HOME"* ]]; then
+  echo "🏠 Project detected within HOME. Mirroring HOME directory for cross-workspace compatibility..." >&2
+  VOLUME_MOUNT="-v $HOME:$HOME"
 else
-  VOLUME_MOUNT="-v $PROJECT_DIR:$PROJECT_DIR"
+  PARENT_DIR="$(dirname "$PROJECT_DIR")"
+  echo "📁 Project detected outside HOME. Mirroring parent directory: $PARENT_DIR..." >&2
+  VOLUME_MOUNT="-v $PARENT_DIR:$PARENT_DIR"
 fi
 
 # Default configuration parameters
