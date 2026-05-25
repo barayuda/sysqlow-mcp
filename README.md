@@ -5,7 +5,7 @@
 [![Database](https://img.shields.io/badge/Turso-libSQL-teal.svg)](https://turso.tech/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-green.svg)](https://www.docker.com/)
 
-**System Query Flow (SysQlow-MCP)** is an intelligent, self-validating local-first engineering knowledge base built on top of the **Model Context Protocol (MCP)**. It acts as a "closed-loop" memory system designed to store technical snippets, automatically scan and learn codebase architectures, validate stored insights against live documentation in real-time, and expose tools for AI agents (like Cursor, VS Code, and Claude) to retrieve, refine, and update developer knowledge.
+**System Query Flow (SysQlow)** is an intelligent, self-validating local-first engineering knowledge base MCP server. It features microsecond Turso Embedded Replica sync, automatic codebase stack & convention learning, and a Gemini-powered Sentinel validation engine to audit snippets against live web documentation in real-time.
 
 ---
 
