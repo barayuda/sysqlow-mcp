@@ -6,6 +6,7 @@
 .env
 .env.*
 *.env
+!.env.example
 
 # Local database binaries and replication state (CRITICAL!)
 # SQLite files change constantly and can contain private credentials/notes
