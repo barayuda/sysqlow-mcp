@@ -264,6 +264,48 @@ ${snippetsSummary}`;
   }
 });
 
+// Auto-Hook: Listens for incoming client sessions and triggers automated learning on startup
+server.on("connect", ({ session }) => {
+  console.error(`[SysQlow Info] New client session connected: ${session.sessionId || "default"}`);
+  
+  // A. Triggered when the client is fully initialized and roots are available
+  session.on("ready", async () => {
+    console.error("[SysQlow Info] Client session ready. Checking workspace roots...");
+    try {
+      const roots = session.roots;
+      if (roots && roots.length > 0) {
+        // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
+        const rootPath = roots[0].uri.replace(/^file:\/\//, "");
+        console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
+        
+        await learnCodebase(rootPath);
+        console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
+      } else {
+        console.error("[SysQlow Info] No workspace roots are currently open in the client.");
+      }
+    } catch (err: any) {
+      console.error(`[SysQlow Warn] Failed to automatically learn codebase on ready: ${err.message}`);
+    }
+  });
+
+  // B. Triggered proactively when developer changes/adds workspace folders in the IDE
+  session.on("rootsChanged", async (event) => {
+    console.error("[SysQlow Info] Workspace folders updated in client. Re-scanning roots...");
+    try {
+      const roots = event.roots;
+      if (roots && roots.length > 0) {
+        const rootPath = roots[0].uri.replace(/^file:\/\//, "");
+        console.error(`[SysQlow Auto-Hook] Re-learning updated codebase at root: ${rootPath}`);
+        
+        await learnCodebase(rootPath);
+        console.error("[SysQlow Auto-Hook] Updated codebase auto-learning completed successfully!");
+      }
+    } catch (err: any) {
+      console.error(`[SysQlow Warn] Failed to automatically learn codebase on rootsChanged: ${err.message}`);
+    }
+  });
+});
+
 // Start the server using the configured transport mode
 // If MCP_TRANSPORT is set to "sse", it boots as an HTTP/SSE server. Otherwise, it defaults to stdio.
 const transportMode = process.env.MCP_TRANSPORT === "sse" ? "httpStream" : "stdio";
