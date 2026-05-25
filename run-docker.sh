@@ -30,6 +30,12 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Save stdout to FD 3, and redirect stdout to stderr for the setup and build phases.
+# This prevents diagnostic logs and build logs from polluting stdout, which
+# would corrupt the MCP JSON-RPC protocol when the client spawns this script directly.
+exec 3>&1
+exec 1>&2
+
 echo "=========================================================="
 echo "🛡️  SysQlow-MCP: Initializing Persistent Environment..."
 echo "=========================================================="
@@ -97,6 +103,10 @@ if [ "$TRANSPORT_MODE" == "sse" ]; then
   echo "🖥️  Web Admin Dashboard: http://localhost:50741/"
 fi
 echo "=========================================================="
+
+# Restore stdout for the actual container process
+exec 1>&3
+exec 3>&-
 
 # Run container with dynamically configured parameters:
 #  --name : names the container explicitly
