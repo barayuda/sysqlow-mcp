@@ -183,6 +183,16 @@ Simply execute the included bash script to clean, rebuild, and start the contain
 
 This binds port **`50741`** on your local machine to the container, directing database replica files securely to the mounted `data/` directory.
 
+> [!WARNING]
+> **🔒 Security Checklist & Data Leak Prevention Audit (TODO):**
+> To enable seamless multi-workspace scanning across different folders, `run-docker.sh` dynamically mirrors the host's home folder (`-v $HOME:$HOME`) into the Docker sandbox.
+> * **Exposure Risks:** Because the containerized MCP server receives direct read-write permissions mapped to the host's `$HOME` tree, any unverified third-party libraries, compromised runtime dependencies, or untrusted scripts executed inside the container could potentially scan and leak sensitive host credentials (such as `~/.ssh/`, `~/.aws/credentials`, `~/.npmrc`, or local system `.env` files).
+> * **Audit Steps & Mitigations:**
+>   - [ ] **Restrict Mount Scope:** If your machine handles highly sensitive credentials, modify the `VOLUME_MOUNT` logic in `run-docker.sh` to bind-mount a dedicated, restricted workspace folder (e.g., `-v $HOME/Projects:$HOME/Projects`) instead of the root `$HOME` folder.
+>   - [ ] **File Access Logs Verification:** Regularly review the container's file read operations inside standard diagnostics to guarantee that the server never reads directories outside designated development workspaces.
+>   - [ ] **Minimize Secret Injection:** Ensure that only essential variables are passed to the container, and critical cloud keys (like `GEMINI_API_KEY` or `TURSO_AUTH_TOKEN`) are secured and masked by the dashboard interface.
+
+
 ---
 
 ## 🖥️ Interactive Web Admin & Knowledge Graph Dashboard
