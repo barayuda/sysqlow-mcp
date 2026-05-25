@@ -11,6 +11,30 @@ const localDbUrl = localDbPath.startsWith("file:") ? localDbPath : `file:${local
 // Detect if we should use Turso's Embedded Replicas (local-first SQLite sync'd to cloud)
 export const isEmbeddedReplica = !!(dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")));
 
+const effectiveDbMode = isEmbeddedReplica
+  ? "embedded-replica-sync"
+  : !dbUrl
+    ? "local-only"
+    : dbUrl.startsWith("file:")
+      ? "local-file-url"
+      : "direct-url-no-embedded-sync";
+
+const syncTarget = isEmbeddedReplica ? dbUrl : "none";
+
+console.error(
+  `[DB Mode Guard] mode=${effectiveDbMode} | local=${localDbUrl} | syncTarget=${syncTarget}`
+);
+
+if (!isEmbeddedReplica && dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")) === false) {
+  console.error(
+    `[DB Mode Guard] TURSO_DATABASE_URL is set but not libsql/https. Embedded replica sync is disabled.`
+  );
+}
+
+if (isEmbeddedReplica && !dbToken) {
+  console.error("[DB Mode Guard] Embedded replica mode detected, but TURSO_AUTH_TOKEN is missing.");
+}
+
 if (isEmbeddedReplica) {
   console.error(`Configuring database as local-first Embedded Replica (local SQLite "${localDbUrl}" synced with remote Turso)...`);
 } else if (!dbUrl) {

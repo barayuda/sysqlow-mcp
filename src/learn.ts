@@ -83,12 +83,27 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
   // Store snippets in SQLite
   console.error(`Storing ${snippets.length} learned snippets in the database...`);
   for (const item of snippets) {
-    const id = crypto.randomUUID();
-    await client.execute({
-      sql: `INSERT INTO technical_knowledge (id, topic, content, category, is_validated, confidence_score) 
-            VALUES (?, ?, ?, ?, 1, 10)`,
-      args: [id, item.topic, item.content, item.category],
+    const normalizedCategory = item.category?.trim() || "Project Context";
+
+    // Keep auto-learn idempotent across reconnects/restarts by updating existing topic/category rows.
+    const updateRes = await client.execute({
+      sql: `UPDATE technical_knowledge
+            SET content = ?,
+                is_validated = 1,
+                confidence_score = 10,
+                last_validated_at = CURRENT_TIMESTAMP
+            WHERE topic = ? AND category = ?`,
+      args: [item.content, item.topic, normalizedCategory],
     });
+
+    if (Number(updateRes.rowsAffected ?? 0) === 0) {
+      const id = crypto.randomUUID();
+      await client.execute({
+        sql: `INSERT INTO technical_knowledge (id, topic, content, category, is_validated, confidence_score)
+              VALUES (?, ?, ?, ?, 1, 10)`,
+        args: [id, item.topic, item.content, normalizedCategory],
+      });
+    }
   }
 
   // Force replica sync to push to Turso cloud

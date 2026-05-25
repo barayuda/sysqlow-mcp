@@ -17,6 +17,21 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
+function buildSafeFtsQuery(rawQuery: string): string {
+  // Remove punctuation that commonly breaks FTS5 parser, then require all terms.
+  const normalized = rawQuery.replace(/[^\w\s-]+/g, " ").trim();
+  const terms = normalized.split(/\s+/).filter(Boolean);
+
+  if (terms.length === 0) {
+    const escapedRaw = rawQuery.replace(/"/g, '""');
+    return `"${escapedRaw}"`;
+  }
+
+  return terms
+    .map((term) => `"${term.replace(/"/g, '""')}"`)
+    .join(" AND ");
+}
+
 // Tool 1: store_knowledge
 server.addTool({
   name: "store_knowledge",
@@ -93,6 +108,7 @@ server.addTool({
       } else {
         // Try FTS5 MATCH first
         try {
+          const safeFtsQuery = buildSafeFtsQuery(query);
           let ftsSql = `
             SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
             FROM technical_knowledge 
@@ -100,7 +116,7 @@ server.addTool({
               SELECT id FROM technical_knowledge_fts WHERE technical_knowledge_fts MATCH ?
             )
           `;
-          const ftsArgs: any[] = [query];
+          const ftsArgs: any[] = [safeFtsQuery];
           
           if (category) {
             ftsSql += " AND category = ?";
@@ -264,29 +280,36 @@ ${snippetsSummary}`;
   }
 });
 
+// Helper to run auto-scanning for a session's workspace roots
+const triggerAutoScan = async (session: any) => {
+  console.error("[SysQlow Info] Client session active. Checking workspace roots...");
+  try {
+    const roots = session.roots;
+    if (roots && roots.length > 0) {
+      // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
+      const rootPath = roots[0].uri.replace(/^file:\/\//, "");
+      console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
+      
+      await learnCodebase(rootPath);
+      console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
+    } else {
+      console.error("[SysQlow Info] No workspace roots are currently open in the client.");
+    }
+  } catch (err: any) {
+    console.error(`[SysQlow Warn] Failed to automatically learn codebase: ${err.message}`);
+  }
+};
+
 // Auto-Hook: Listens for incoming client sessions and triggers automated learning on startup
 server.on("connect", ({ session }) => {
   console.error(`[SysQlow Info] New client session connected: ${session.sessionId || "default"}`);
   
-  // A. Triggered when the client is fully initialized and roots are available
-  session.on("ready", async () => {
-    console.error("[SysQlow Info] Client session ready. Checking workspace roots...");
-    try {
-      const roots = session.roots;
-      if (roots && roots.length > 0) {
-        // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
-        const rootPath = roots[0].uri.replace(/^file:\/\//, "");
-        console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
-        
-        await learnCodebase(rootPath);
-        console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
-      } else {
-        console.error("[SysQlow Info] No workspace roots are currently open in the client.");
-      }
-    } catch (err: any) {
-      console.error(`[SysQlow Warn] Failed to automatically learn codebase on ready: ${err.message}`);
-    }
-  });
+  // Prevent race condition: if session is already ready, run scan immediately. Otherwise wait for ready event.
+  if (session.isReady) {
+    triggerAutoScan(session);
+  } else {
+    session.on("ready", () => triggerAutoScan(session));
+  }
 
   // B. Triggered proactively when developer changes/adds workspace folders in the IDE
   session.on("rootsChanged", async (event) => {
