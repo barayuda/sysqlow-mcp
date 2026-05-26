@@ -409,12 +409,27 @@ app.get("/api/graph", async (c) => {
         
         // Connect nodes sharing the same category
         if (nodeA.category && nodeA.category !== "None" && nodeA.category === nodeB.category) {
-          edges.push({
-            from: nodeA.id,
-            to: nodeB.id,
-            label: "Same Category",
-            arrows: undefined
-          });
+          // If the category is "Project Context", only connect them if they belong to the same project
+          // (i.e. they share the same prefix before the colon in their topic label, like "sysqlow-mcp:")
+          if (nodeA.category === "Project Context") {
+            const prefixA = nodeA.label.split(":")[0]?.trim().toLowerCase();
+            const prefixB = nodeB.label.split(":")[0]?.trim().toLowerCase();
+            if (prefixA && prefixB && prefixA === prefixB) {
+              edges.push({
+                from: nodeA.id,
+                to: nodeB.id,
+                label: "Same Category",
+                arrows: undefined
+              });
+            }
+          } else {
+            edges.push({
+              from: nodeA.id,
+              to: nodeB.id,
+              label: "Same Category",
+              arrows: undefined
+            });
+          }
         }
       }
       

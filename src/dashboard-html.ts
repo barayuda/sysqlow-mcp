@@ -224,7 +224,7 @@ export const dashboardHtml = `<!DOCTYPE html>
     </section>
 
     <!-- Right: Administrative Pane (Logs & Env Stacked) -->
-    <section class="w-[450px] flex flex-col gap-6 overflow-hidden">
+    <section class="w-[380px] flex flex-col gap-6 overflow-hidden">
       
       <!-- Top: Live MCP Logs Terminal -->
       <article class="flex-1 min-h-0 flex flex-col glass-panel rounded-2xl overflow-hidden">
@@ -531,9 +531,9 @@ export const dashboardHtml = `<!DOCTYPE html>
               iterations: 150
             },
             barnesHut: {
-              gravitationalConstant: -2000,
-              centralGravity: 0.3,
-              springLength: 120
+              gravitationalConstant: -3500,
+              centralGravity: 0.08,
+              springLength: 180
             }
           },
           interaction: {
