@@ -174,28 +174,52 @@ export const dashboardHtml = `<!DOCTYPE html>
           </span>
           <h2 class="font-outfit font-semibold text-base text-slate-800 dark:text-slate-100">Knowledge Graph Relations</h2>
         </div>
-        <div class="flex items-center space-x-4 text-xs text-slate-500 dark:text-slate-400">
-          <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500 mr-1.5"></span> Validated</span>
-          <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-amber-500 mr-1.5"></span> Outdated / Pending</span>
-          <span class="flex items-center"><span class="w-2.5 h-2.5 rounded-full bg-blue-500 mr-1.5"></span> Project Context</span>
-        </div>
       </div>
       
       <!-- Graph Canvas Container -->
       <div id="mynetwork" class="flex-1 w-full h-full cursor-grab active:cursor-grabbing"></div>
       
-      <!-- Legend/Control Overlay -->
-      <div class="absolute bottom-4 left-4 p-4 rounded-xl glass-panel text-[11px] text-slate-500 dark:text-slate-400 max-w-xs space-y-2.5 neon-glow">
+      <!-- Stabilizing Layout Indicator Overlay -->
+      <div id="graph-loader" class="absolute top-4 right-4 px-3.5 py-2 rounded-xl glass-panel text-[10px] text-slate-500 dark:text-slate-400 flex items-center space-x-2.5 transition-opacity duration-300 opacity-0 pointer-events-none neon-glow z-10">
+        <svg class="w-3.5 h-3.5 animate-spin-custom text-brand-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        <span class="font-semibold tracking-wide uppercase">Stabilizing Layout...</span>
+      </div>
+
+      <!-- Legend/Floating Control Overlay -->
+      <div class="absolute bottom-4 left-4 p-4 rounded-2xl glass-panel text-[11px] text-slate-500 dark:text-slate-400 w-64 space-y-4 shadow-xl neon-glow z-10">
+        <!-- Live Graph Statistics -->
         <div>
-          <p class="font-bold text-slate-700 dark:text-slate-200">Interactive Controls:</p>
-          <p>• Drag nodes to manually arrange</p>
-          <p>• Scroll to zoom in/out</p>
-          <p>• Click any node to open details</p>
+          <p class="font-outfit font-bold text-slate-700 dark:text-slate-200 text-xs mb-2 tracking-wide uppercase">Graph Analytics</p>
+          <div class="grid grid-cols-2 gap-2 text-[10px] font-semibold">
+            <div class="p-2 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/15 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-between">
+              <span>Validated</span>
+              <span id="stat-validated" class="font-bold text-xs">0</span>
+            </div>
+            <div class="p-2 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/20 text-amber-600 dark:text-amber-400 flex items-center justify-between">
+              <span>Pending</span>
+              <span id="stat-pending" class="font-bold text-xs">0</span>
+            </div>
+            <div class="p-2 rounded-xl bg-blue-500/10 dark:bg-blue-500/15 border border-blue-500/20 text-blue-600 dark:text-blue-400 flex items-center justify-between col-span-2">
+              <span class="flex items-center"><span class="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1.5 animate-pulse"></span>Project Context</span>
+              <span id="stat-context" class="font-bold text-xs">0</span>
+            </div>
+          </div>
         </div>
-        <button onclick="centerGraph()" class="w-full py-1.5 px-3 rounded-lg bg-brand-500/10 border border-brand-500/20 hover:bg-brand-500/20 active:bg-brand-500/30 transition text-brand-400 font-semibold flex items-center justify-center space-x-1.5 text-[10px]">
-          <svg class="w-3.5 h-3.5 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-          <span>Recenter & Fit View</span>
-        </button>
+
+        <!-- Layout Controls -->
+        <div class="pt-3 border-t border-slate-500/10 dark:border-white/5 space-y-2.5">
+          <div class="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-400 font-medium">
+            <span>Freeze Node Layout</span>
+            <button id="physics-toggle-btn" onclick="togglePhysics()" class="relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-slate-300 dark:bg-slate-750 transition-colors duration-200 ease-in-out focus:outline-none" role="switch" aria-checked="false">
+              <span id="physics-toggle-dot" class="pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out translate-x-0"></span>
+            </button>
+          </div>
+          
+          <button onclick="centerGraph()" class="w-full py-2 px-3 rounded-lg bg-brand-500/15 border border-brand-500/30 hover:bg-brand-500/25 active:bg-brand-500/35 transition text-brand-500 dark:text-brand-400 font-bold flex items-center justify-center space-x-1.5 text-[10px]">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+            <span>Recenter & Fit View</span>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -356,56 +380,112 @@ export const dashboardHtml = `<!DOCTYPE html>
       setInterval(fetchLogs, 4000);
     });
 
+    let physicsEnabled = true;
+
+    function togglePhysics() {
+      physicsEnabled = !physicsEnabled;
+      
+      const btn = document.getElementById("physics-toggle-btn");
+      const dot = document.getElementById("physics-toggle-dot");
+      
+      if (physicsEnabled) {
+        btn.className = "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-brand-500 transition-colors duration-200 ease-in-out focus:outline-none";
+        dot.className = "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out translate-x-4";
+        if (network) {
+          network.setOptions({ physics: { enabled: true } });
+        }
+      } else {
+        btn.className = "relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-slate-300 dark:bg-slate-700 transition-colors duration-200 ease-in-out focus:outline-none";
+        dot.className = "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out translate-x-0";
+        if (network) {
+          network.setOptions({ physics: { enabled: false } });
+        }
+      }
+    }
+
     // B. Fetch Graph Data
     async function refreshData() {
       try {
         const res = await fetch("/api/graph");
         const data = await res.json();
         
+        const isDark = document.documentElement.classList.contains("dark");
+        const nodeTextColor = isDark ? "#ffffff" : "#0f172a";
+        
+        let validatedCount = 0;
+        let pendingCount = 0;
+        let contextCount = 0;
+
         // Structure nodes for Vis.js
         const visNodes = data.nodes.map(n => {
-          let color = "#f59e0b"; // Outdated / Pending (Amber)
+          let colorBg = "rgba(245, 158, 11, 0.12)"; // Outdated / Pending (Amber)
+          let colorBorder = "rgba(245, 158, 11, 0.5)";
+          let highlightBorder = "#f59e0b";
+          let labelPrefix = "⚠️  ";
+          
           if (n.category === "Project Context") {
-            color = "#3b82f6"; // Blue
+            colorBg = "rgba(59, 130, 246, 0.12)"; // Blue
+            colorBorder = "rgba(59, 130, 246, 0.5)";
+            highlightBorder = "#3b82f6";
+            labelPrefix = "🧠  ";
+            contextCount++;
           } else if (n.validated === 1 || n.validated === true) {
-            color = "#10b981"; // Green (validated)
+            colorBg = "rgba(16, 185, 129, 0.12)"; // Green (validated)
+            colorBorder = "rgba(16, 185, 129, 0.5)";
+            highlightBorder = "#10b981";
+            labelPrefix = "✅  ";
+            validatedCount++;
+          } else {
+            pendingCount++;
           }
 
           return {
             id: n.id,
-            label: n.label,
+            label: labelPrefix + n.label,
             color: {
-              background: color,
-              border: "#1e293b",
+              background: isDark ? colorBg : "rgba(255, 255, 255, 0.95)",
+              border: colorBorder,
               highlight: {
-                background: color,
-                border: "#10b981"
+                background: isDark ? colorBg.replace("0.12", "0.22") : "rgba(255, 255, 255, 0.98)",
+                border: highlightBorder
               },
               hover: {
-                background: color,
-                border: "#10b981"
+                background: isDark ? colorBg.replace("0.12", "0.22") : "rgba(255, 255, 255, 0.98)",
+                border: highlightBorder
               }
             },
             font: {
-              color: "#f8fafc",
-              face: "Inter"
+              color: nodeTextColor,
+              face: "Outfit",
+              size: 13,
+              bold: {
+                color: nodeTextColor,
+                size: 13,
+                vadjust: 0
+              }
             },
             shape: "box",
-            margin: 12,
+            margin: { top: 12, bottom: 12, left: 16, right: 16 },
             borderWidth: 1.5,
-            borderWidthSelected: 2,
+            borderWidthSelected: 2.5,
             shadow: {
               enabled: true,
-              color: "rgba(0,0,0,0.5)",
-              size: 5
+              color: isDark ? "rgba(0,0,0,0.4)" : "rgba(15, 23, 42, 0.08)",
+              size: 8,
+              x: 0,
+              y: 4
             },
             // Custom payload for details pane
             payload: n
           };
         });
 
+        // Update live graph metrics
+        document.getElementById("stat-validated").innerText = validatedCount;
+        document.getElementById("stat-pending").innerText = pendingCount;
+        document.getElementById("stat-context").innerText = contextCount;
+
         // Dynamic edge colors matching the light/dark background contrast
-        const isDark = document.documentElement.classList.contains("dark");
         const categoryEdgeColor = isDark ? "rgba(255,255,255,0.08)" : "rgba(15, 23, 42, 0.08)";
         const mentionsEdgeColor = isDark ? "rgba(16, 185, 129, 0.4)" : "rgba(16, 185, 129, 0.6)";
         const labelFontColor = isDark ? "rgba(255,255,255,0.4)" : "rgba(15, 23, 42, 0.5)";
@@ -416,11 +496,13 @@ export const dashboardHtml = `<!DOCTYPE html>
           return {
             from: e.from,
             to: e.to,
-            arrows: e.arrows || undefined,
+            arrows: isCategory ? undefined : { to: { enabled: true, scaleFactor: 0.8 } },
             dashes: isCategory,
+            width: isCategory ? 1 : 2,
             color: {
               color: isCategory ? categoryEdgeColor : mentionsEdgeColor,
-              highlight: "#10b981"
+              highlight: "#10b981",
+              hover: "#a855f7"
             },
             label: isCategory ? "" : e.label,
             font: {
@@ -443,7 +525,11 @@ export const dashboardHtml = `<!DOCTYPE html>
         };
         const options = {
           physics: {
-            stabilization: true,
+            enabled: physicsEnabled,
+            stabilization: {
+              enabled: true,
+              iterations: 150
+            },
             barnesHut: {
               gravitationalConstant: -2000,
               centralGravity: 0.3,
@@ -458,8 +544,17 @@ export const dashboardHtml = `<!DOCTYPE html>
         
         network = new vis.Network(container, networkData, options);
 
-        // Auto-center and fit the graph layout as soon as physics stabilization is complete
+        // Physics layout loader states & auto-centering
+        network.on("startStabilizing", () => {
+          document.getElementById("graph-loader").classList.remove("opacity-0", "pointer-events-none");
+        });
+        
+        network.on("stabilizationIterationsDone", () => {
+          document.getElementById("graph-loader").classList.add("opacity-0", "pointer-events-none");
+        });
+        
         network.once("stabilized", () => {
+          document.getElementById("graph-loader").classList.add("opacity-0", "pointer-events-none");
           centerGraph();
         });
 
