@@ -111,6 +111,22 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
 
   // Store snippets in SQLite
   console.error(`Storing ${snippets.length} learned snippets in the database...`);
+  
+  // Prevent duplication and stale context: clean up existing automated snippets matching this project prefix first
+  try {
+    const deleteRes = await client.execute({
+      sql: `DELETE FROM technical_knowledge 
+            WHERE category = 'Project Context' 
+              AND (topic LIKE ? OR topic = ?)`,
+      args: [`${projectName}:%`, projectName],
+    });
+    if (Number(deleteRes.rowsAffected ?? 0) > 0) {
+      console.error(`Cleaned up ${deleteRes.rowsAffected} existing project context snippets for "${projectName}" to prevent duplication.`);
+    }
+  } catch (err: any) {
+    console.error(`Warning: Failed to clean up old project context snippets: ${err.message}`);
+  }
+
   for (const item of snippets) {
     const normalizedCategory = item.category?.trim() || "Project Context";
 
