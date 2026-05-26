@@ -7,8 +7,11 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch src/index.ts",
+    "typecheck": "bunx tsc --noEmit",
     "build": "bun build ./src/index.ts --outdir ./dist --target bun --external fastmcp --external @libsql/client --external zod",
-    "compile": "bun build ./src/index.ts --compile --outfile ./dist/sysqlow-mcp --external sury --external @valibot/to-json-schema --external effect --external arktype --external typia --external valibot"
+    "compile": "bun build ./src/index.ts --compile --outfile ./dist/sysqlow-mcp --external sury --external @valibot/to-json-schema --external effect --external arktype --external typia --external valibot",
+    "test:workflow": "bun run src/test-workflow.ts",
+    "prepare": "husky"
   },
   "dependencies": {
     "@libsql/client": "^0.17.3",
@@ -17,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
+    "husky": "^9.1.7",
     "typescript": "^5.4.5"
   }
 }

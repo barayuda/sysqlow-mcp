@@ -4,6 +4,8 @@
 [![Runtime](https://img.shields.io/badge/Bun-v1.3+-orange.svg)](https://bun.sh/)
 [![Database](https://img.shields.io/badge/Turso-libSQL-teal.svg)](https://turso.tech/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-green.svg)](https://www.docker.com/)
+[![Hooks](https://img.shields.io/badge/Hooks-Husky%20Enabled-brightgreen.svg)](#)
+[![Code Coverage Status](https://github.com/barayuda/sysqlow-mcp/actions/workflows/coverage.yml/badge.svg)](https://github.com/barayuda/sysqlow-mcp/actions/workflows/coverage.yml)
 
 **System Query Flow (SysQlow)** is an intelligent, self-validating local-first engineering knowledge base MCP server. It features microsecond Turso Embedded Replica sync, automatic codebase stack & convention learning, and a Gemini-powered Sentinel validation engine to audit snippets against live web documentation in real-time.
 
@@ -34,7 +36,7 @@ graph TD
 
 ## 🔌 MCP Tools Specification & Usage Guides
 
-SysQlow-MCP exposes five highly optimized, Zod-validated tools. 
+SysQlow-MCP exposes six highly optimized, Zod-validated tools. 
 
 ---
 
@@ -139,6 +141,7 @@ Saves an approved update to a stored snippet. This is the **Human-in-the-loop** 
 * **Parameters:**
   * `id` (string, required): The UUID of the snippet to update.
   * `content` (string, required): The new, refined snippet content.
+  * `revalidateBeforeCommit` (boolean, optional): Defaults to `true`. Runs validation again before writing the update.
 * **How to use it:**
   Ask your IDE's assistant:
   > *"The validation report looks correct. Commit the suggested diff for snippet '7f9b1c90-2da8-4e12-b0c8-472251a3fb80'."*
@@ -150,6 +153,60 @@ Saves an approved update to a stored snippet. This is the **Human-in-the-loop** 
     "id": "7f9b1c90-2da8-4e12-b0c8-472251a3fb80"
   }
   ```
+
+---
+
+### 6. `knowledge_workflow`
+High-level orchestration tool for intent-first prompting. It helps clients auto-route requests without always mentioning specific tool names.
+
+* **Parameters:**
+  * `intent` (enum, required): `learn` | `save` | `search` | `validate` | `apply`
+  * `projectPath` (string, optional): Used by `learn`
+  * `topic`, `content`, `category` (optional fields): Used by `save`
+  * `query`, `category` (optional fields): Used by `search`
+  * `id` (string, optional): Used by `validate` and `apply`
+  * `content` (string, optional): Used by `apply`
+  * `revalidateBeforeCommit` (boolean, optional): Used by `apply` (default `true`)
+* **How to use it:**
+  Ask your IDE assistant with intent language:
+  > *"Analyze this workspace and store project context."*
+  > *"Save this snippet under Backend."*
+  > *"Search my knowledge base for rate limiting."*
+  > *"Audit snippet ID ..."*
+  > *"Apply approved update for snippet ID ..."*
+
+---
+
+## ✍️ Prompt Aliases And Ready Prompt Pack
+
+Use intent-style prompts so your assistant can trigger SysQlow automatically even when you do not mention the server name.
+
+### Prompt aliases (recommended verbs)
+- **Analyze** = `learn_codebase` / `knowledge_workflow(intent=learn)`
+- **Save** = `store_knowledge` / `knowledge_workflow(intent=save)`
+- **Search / Find** = `recall_knowledge` / `knowledge_workflow(intent=search)`
+- **Audit / Validate** = `validate_knowledge` / `knowledge_workflow(intent=validate)`
+- **Apply** = `commit_update` / `knowledge_workflow(intent=apply)`
+
+### Copy-paste prompt pack
+1. Analyze my current workspace and save project context for later answers.
+2. Save this technical note. Topic: <topic>. Category: <category>. Content: <content>.
+3. Find my stored notes about <keyword> in category <category>.
+4. Audit snippet ID <id> against current official documentation.
+5. Apply this approved update to snippet ID <id> with content: <content>.
+
+### Category discipline
+For better recall consistency, categories are normalized to canonical names:
+- Backend
+- Frontend
+- DevOps
+- Project Context
+- Database
+- Testing
+- Tooling
+
+### Safe update discipline
+`commit_update` now defaults to `revalidateBeforeCommit=true`, so updates are validated again before final write.
 
 ---
 

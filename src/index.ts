@@ -68,6 +68,57 @@ function buildSafeFtsQuery(rawQuery: string): string {
     .join(" AND ");
 }
 
+const CANONICAL_CATEGORIES = [
+  "Backend",
+  "Frontend",
+  "DevOps",
+  "Project Context",
+  "Database",
+  "Testing",
+  "Tooling"
+] as const;
+
+function normalizeCategory(raw?: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const normalized = trimmed.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+
+  const aliases: Record<string, string> = {
+    backend: "Backend",
+    server: "Backend",
+    api: "Backend",
+    frontend: "Frontend",
+    ui: "Frontend",
+    client: "Frontend",
+    devops: "DevOps",
+    infra: "DevOps",
+    infrastructure: "DevOps",
+    "project context": "Project Context",
+    context: "Project Context",
+    database: "Database",
+    db: "Database",
+    testing: "Testing",
+    test: "Testing",
+    tooling: "Tooling",
+    tools: "Tooling"
+  };
+
+  if (aliases[normalized]) {
+    return aliases[normalized];
+  }
+
+  return trimmed
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function formatCategoryGuidance(): string {
+  return `Use consistent categories for better recall: ${CANONICAL_CATEGORIES.join(", ")}.`;
+}
+
 // Tool 1: store_knowledge
 server.addTool({
   name: "store_knowledge",
@@ -81,7 +132,7 @@ server.addTool({
     const id = crypto.randomUUID();
     const topic = args.topic.trim();
     const content = args.content.trim();
-    const category = args.category?.trim() || null;
+    const category = normalizeCategory(args.category);
     
     try {
       await client.execute({
@@ -97,7 +148,7 @@ server.addTool({
       
       return JSON.stringify({
         status: "success",
-        message: "Technical snippet stored successfully.",
+        message: `Technical snippet stored successfully. ${formatCategoryGuidance()}`,
         id,
         topic,
         category
@@ -119,7 +170,7 @@ server.addTool({
   }),
   execute: async (args) => {
     const query = args.query.trim();
-    const category = args.category?.trim() || null;
+    const category = normalizeCategory(args.category);
     
     try {
       let rows: any[] = [];
@@ -231,14 +282,16 @@ server.addTool({
 // Tool 4: commit_update
 server.addTool({
   name: "commit_update",
-  description: "Applies validated updates or corrections to a stored snippet (requires human-in-the-loop review).",
+  description: "Applies validated updates or corrections to a stored snippet (requires human-in-the-loop review). By default it re-validates before commit.",
   parameters: z.object({
     id: z.string().describe("The UUID of the snippet to update"),
     content: z.string().describe("The complete new content of the snippet to save"),
+    revalidateBeforeCommit: z.boolean().optional().describe("If true (default), runs validate_knowledge logic before committing."),
   }),
   execute: async (args) => {
     const id = args.id.trim();
     const content = args.content.trim();
+    const revalidateBeforeCommit = args.revalidateBeforeCommit ?? true;
     
     try {
       // 1. Verify existence
@@ -252,6 +305,14 @@ server.addTool({
       }
       
       const topic = checkRes.rows[0].topic as string;
+
+      let validationStatus: string | null = null;
+      let validationConfidence: number | null = null;
+      if (revalidateBeforeCommit) {
+        const validationReport = await validateKnowledgeItem(id);
+        validationStatus = validationReport.status;
+        validationConfidence = validationReport.confidence_score;
+      }
       
       // 2. Perform the update and mark validated
       await client.execute({
@@ -271,7 +332,10 @@ server.addTool({
       return JSON.stringify({
         status: "success",
         message: `Snippet "${topic}" has been successfully updated and marked as validated.`,
-        id
+        id,
+        revalidated_before_commit: revalidateBeforeCommit,
+        validation_status: validationStatus,
+        validation_confidence_score: validationConfidence
       }, null, 2);
     } catch (error: any) {
       console.error(`Error in commit_update for ID "${id}": ${error.message}`);
@@ -312,6 +376,196 @@ ${snippetsSummary}`;
     } catch (error: any) {
       console.error(`Error in learn_codebase: ${error.message}`);
       return `Failed to analyze and learn codebase: ${error.message}`;
+    }
+  }
+});
+
+// Tool 6: knowledge_workflow
+server.addTool({
+  name: "knowledge_workflow",
+  description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
+  parameters: z.object({
+    intent: z.enum(["learn", "save", "search", "validate", "apply"]).describe("Workflow intent to execute."),
+    projectPath: z.string().optional().describe("Used by intent=learn."),
+    topic: z.string().optional().describe("Used by intent=save."),
+    content: z.string().optional().describe("Used by intent=save or intent=apply."),
+    query: z.string().optional().describe("Used by intent=search."),
+    category: z.string().optional().describe("Optional category for save/search."),
+    id: z.string().optional().describe("Used by intent=validate or intent=apply."),
+    revalidateBeforeCommit: z.boolean().optional().describe("Used by intent=apply. Defaults to true."),
+  }),
+  execute: async (args) => {
+    const intent = args.intent;
+
+    try {
+      if (intent === "learn") {
+        const projectPath = args.projectPath?.trim() || process.cwd();
+        const result = await learnCodebase(projectPath);
+
+        if (result.detectedFiles.length === 0) {
+          return `No configuration or README files found at path "${projectPath}".`;
+        }
+
+        return JSON.stringify({
+          status: "success",
+          intent,
+          project: result.projectName,
+          detected_files: result.detectedFiles,
+          snippets_stored: result.snippets.length
+        }, null, 2);
+      }
+
+      if (intent === "save") {
+        if (!args.topic?.trim() || !args.content?.trim()) {
+          return "For intent=save, both topic and content are required.";
+        }
+
+        const id = crypto.randomUUID();
+        const topic = args.topic.trim();
+        const content = args.content.trim();
+        const category = normalizeCategory(args.category);
+
+        await client.execute({
+          sql: `INSERT INTO technical_knowledge (id, topic, content, category) VALUES (?, ?, ?, ?)`,
+          args: [id, topic, content, category],
+        });
+
+        if (isEmbeddedReplica) {
+          client.sync().catch((err: any) => console.error(`Replication sync error in workflow/save: ${err.message}`));
+        }
+
+        return JSON.stringify({
+          status: "success",
+          intent,
+          id,
+          topic,
+          category,
+          guidance: formatCategoryGuidance()
+        }, null, 2);
+      }
+
+      if (intent === "search") {
+        const query = args.query?.trim() || "*";
+        const category = normalizeCategory(args.category);
+        let sql = `
+          SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+          FROM technical_knowledge
+        `;
+        const sqlArgs: any[] = [];
+
+        if (query === "*" || query === "") {
+          if (category) {
+            sql += " WHERE category = ?";
+            sqlArgs.push(category);
+          }
+          sql += " ORDER BY created_at DESC";
+        } else {
+          const safeFtsQuery = buildSafeFtsQuery(query);
+          sql += ` WHERE id IN (SELECT id FROM technical_knowledge_fts WHERE technical_knowledge_fts MATCH ?)`;
+          sqlArgs.push(safeFtsQuery);
+          if (category) {
+            sql += " AND category = ?";
+            sqlArgs.push(category);
+          }
+          sql += " ORDER BY created_at DESC";
+        }
+
+        let rows: any[] = [];
+        try {
+          const res = await client.execute({ sql, args: sqlArgs });
+          rows = res.rows;
+        } catch {
+          if (query !== "*" && query !== "") {
+            let likeSql = `
+              SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+              FROM technical_knowledge
+              WHERE (topic LIKE ? OR content LIKE ? OR category LIKE ?)
+            `;
+            const likeArgs: any[] = [`%${query}%`, `%${query}%`, `%${query}%`];
+            if (category) {
+              likeSql += " AND category = ?";
+              likeArgs.push(category);
+            }
+            likeSql += " ORDER BY created_at DESC";
+            const likeRes = await client.execute({ sql: likeSql, args: likeArgs });
+            rows = likeRes.rows;
+          }
+        }
+
+        return JSON.stringify({
+          status: "success",
+          intent,
+          query,
+          category,
+          count: rows.length,
+          results: rows
+        }, null, 2);
+      }
+
+      if (intent === "validate") {
+        const id = args.id?.trim();
+        if (!id) {
+          return "For intent=validate, id is required.";
+        }
+        const report = await validateKnowledgeItem(id);
+        return JSON.stringify({
+          status: "success",
+          intent,
+          id,
+          report
+        }, null, 2);
+      }
+
+      if (intent === "apply") {
+        const id = args.id?.trim();
+        const content = args.content?.trim();
+        const revalidateBeforeCommit = args.revalidateBeforeCommit ?? true;
+
+        if (!id || !content) {
+          return "For intent=apply, both id and content are required.";
+        }
+
+        const checkRes = await client.execute({
+          sql: "SELECT topic FROM technical_knowledge WHERE id = ?",
+          args: [id]
+        });
+        if (checkRes.rows.length === 0) {
+          return `Error: Snippet with ID "${id}" does not exist.`;
+        }
+
+        let validationStatus: string | null = null;
+        let validationConfidence: number | null = null;
+        if (revalidateBeforeCommit) {
+          const validationReport = await validateKnowledgeItem(id);
+          validationStatus = validationReport.status;
+          validationConfidence = validationReport.confidence_score;
+        }
+
+        await client.execute({
+          sql: `UPDATE technical_knowledge
+                SET content = ?, is_validated = 1, last_validated_at = CURRENT_TIMESTAMP
+                WHERE id = ?`,
+          args: [content, id],
+        });
+
+        if (isEmbeddedReplica) {
+          client.sync().catch((err: any) => console.error(`Replication sync error in workflow/apply: ${err.message}`));
+        }
+
+        return JSON.stringify({
+          status: "success",
+          intent,
+          id,
+          revalidated_before_commit: revalidateBeforeCommit,
+          validation_status: validationStatus,
+          validation_confidence_score: validationConfidence
+        }, null, 2);
+      }
+
+      return `Unsupported workflow intent: ${intent}`;
+    } catch (error: any) {
+      console.error(`Error in knowledge_workflow (${intent}): ${error.message}`);
+      return `knowledge_workflow failed for intent "${intent}": ${error.message}`;
     }
   }
 });
