@@ -417,7 +417,10 @@ server.addTool({
 
       if (intent === "save") {
         if (!args.topic?.trim() || !args.content?.trim()) {
-          return "For intent=save, both topic and content are required.";
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=save, both topic and content are required."
+          }, null, 2);
         }
 
         const id = crypto.randomUUID();
@@ -505,7 +508,10 @@ server.addTool({
       if (intent === "validate") {
         const id = args.id?.trim();
         if (!id) {
-          return "For intent=validate, id is required.";
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=validate, id is required."
+          }, null, 2);
         }
         const report = await validateKnowledgeItem(id);
         return JSON.stringify({
@@ -522,7 +528,10 @@ server.addTool({
         const revalidateBeforeCommit = args.revalidateBeforeCommit ?? true;
 
         if (!id || !content) {
-          return "For intent=apply, both id and content are required.";
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=apply, both id and content are required."
+          }, null, 2);
         }
 
         const checkRes = await client.execute({
@@ -530,7 +539,10 @@ server.addTool({
           args: [id]
         });
         if (checkRes.rows.length === 0) {
-          return `Error: Snippet with ID "${id}" does not exist.`;
+          return JSON.stringify({
+            status: "error",
+            message: `Snippet with ID "${id}" does not exist.`
+          }, null, 2);
         }
 
         let validationStatus: string | null = null;
@@ -562,10 +574,16 @@ server.addTool({
         }, null, 2);
       }
 
-      return `Unsupported workflow intent: ${intent}`;
+      return JSON.stringify({
+        status: "error",
+        message: `Unsupported workflow intent: ${intent}`
+      }, null, 2);
     } catch (error: any) {
       console.error(`Error in knowledge_workflow (${intent}): ${error.message}`);
-      return `knowledge_workflow failed for intent "${intent}": ${error.message}`;
+      return JSON.stringify({
+        status: "error",
+        message: `knowledge_workflow failed for intent "${intent}": ${error.message}`
+      }, null, 2);
     }
   }
 });
