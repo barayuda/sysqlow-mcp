@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json bun.lock tsconfig.json schema.sql ./
 
 # Install production dependencies
-RUN bun install --production
+RUN bun install --production --no-scripts
 
 # Copy the source code
 COPY src ./src
