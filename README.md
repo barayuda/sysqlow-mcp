@@ -171,6 +171,73 @@ BRAVE_API_KEY="your-brave-key" # Optional (falls back to DDG scraper)
 
 ---
 
+## ⚡ Running Natively (Without Docker)
+
+Running the server natively on your host machine offers sub-millisecond handshake speeds and **unrestricted workspace filesystem access** across any folder on your machine with zero configuration.
+
+### Option 1: Live Stdio Development Mode
+Great for local testing. The MCP client (e.g., Cursor, Claude Desktop) launches the server using the `bun` runtime in standard input/output mode:
+1. Install dependencies:
+   ```bash
+   bun install
+   ```
+2. Configure your MCP client (e.g. Claude Desktop configuration `claude_desktop_config.json`) to call `bun` directly:
+   ```json
+   {
+     "mcpServers": {
+       "sysqlow-mcp": {
+         "command": "bun",
+         "args": ["run", "/Users/barayuda/Projects/personal/sysqlow-mcp/src/index.ts"],
+         "env": {
+           "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
+           "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
+           "GEMINI_API_KEY": "your-gemini-key",
+           "BRAVE_API_KEY": "your-brave-key"
+         }
+       }
+     }
+   }
+   ```
+
+### Option 2: Compiled Standalone Native Binary (Stdio)
+For maximum speed and portable, dependency-free execution:
+1. Compile the server to a native binary:
+   ```bash
+   bun run compile
+   ```
+   *This outputs a single standalone executable in `dist/sysqlow-mcp` (under ~50MB) that contains the schema, compiler, runtime, and server. You do not even need Bun or Node installed on the machine to run this binary.*
+2. Point your MCP client to the compiled binary:
+   ```json
+   {
+     "mcpServers": {
+       "sysqlow-mcp": {
+         "command": "/Users/barayuda/Projects/personal/sysqlow-mcp/dist/sysqlow-mcp",
+         "env": {
+           "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
+           "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
+           "GEMINI_API_KEY": "your-gemini-key"
+         }
+       }
+     }
+   }
+   ```
+
+### Option 3: SSE Mode with Web Dashboard (HTTP/SSE)
+To run the server in the background natively to access the **Interactive Web Graph Dashboard** on port `50741` without Docker:
+1. Start the server with `MCP_TRANSPORT` set to `sse`:
+   ```bash
+   MCP_TRANSPORT=sse PORT=50741 bun start
+   ```
+2. Open your browser and visit: **`http://localhost:50741/`** to view the live dashboard.
+3. Configure your IDE client to connect directly to the running SSE URL endpoint:
+   ```json
+   "sysqlow-mcp": {
+     "serverURL": "http://localhost:50741/sse"
+   }
+   ```
+
+---
+
 ## 🐳 Running with Docker (SSE & Dashboard Setup)
 
 We provide an automated pipeline that runs the server in SSE transport mode, exposing port **`50741`** to serve both the MCP client connection and the web admin dashboard.
