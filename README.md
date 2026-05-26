@@ -264,6 +264,8 @@ This binds port **`50741`** on your local machine to the container, directing da
 
 ## 🖥️ Interactive Web Admin & Knowledge Graph Dashboard
 
+![SysQlow Dashboard Preview](assets/sysqlow-mcp_dashboard-preview.jpeg)
+
 Once the server is running in SSE mode, open your browser and visit:
 👉 **`http://localhost:50741/`**
 
