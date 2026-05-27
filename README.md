@@ -363,10 +363,10 @@ Once the server is running in SSE mode, open your browser and visit:
    * **Segmented Toggle Bar:** A glassmorphic theme selector inside the header allows you to seamlessly switch between Light, Dark, and System-synced modes (which actively tracks and responds to OS-level color scheme changes in real-time).
    * **Saved Preferences:** Appearance settings are persisted inside `localStorage` across refreshes and restarts.
    * **Dynamic Canvas Contrast Adaptions:** Swapping themes automatically recalibrates Vis.js canvas render colors (drawing high-contrast dark-slate edges and text labels in Light Mode, and glowing semi-transparent white elements in Dark Mode) to prevent edge washout or readability degradation.
-4. **Interactive Multi-Workspace Project Filters (Option D):** Checkbox selections inside the legend allow you to filter nodes and edges dynamically on the Vis.js canvas, instantly isolating project views without slow API calls.
-5. **AI-Generated Unified Refactoring Diffs (Option E):** If a snippet is outdated, the details drawer renders high-contrast, color-coded Git-style unified diff blocks, highlighting added lines in green and deleted lines in red.
+4. **Interactive Multi-Workspace Project Filters:** Checkbox selections inside the legend allow you to filter nodes and edges dynamically on the Vis.js canvas, instantly isolating project views without slow API calls.
+5. **AI-Generated Unified Refactoring Diffs:** If a snippet is outdated, the details drawer renders high-contrast, color-coded Git-style unified diff blocks, highlighting added lines in green and deleted lines in red.
 6. **Sentinel Manual Audit Controls:** Click any node to open the dense, high-contrast details sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
-7. **Passive Background "Sentinel" Auditor (Option C):** Active in background SSE mode, this worker sweeps the database every 12 hours to automatically audit and sync outdated snippets.
+7. **Passive Background "Sentinel" Auditor:** Active in background SSE mode, this worker sweeps the database every 12 hours to automatically audit and sync outdated snippets.
 8. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server operations, automatically classifying standard startup and database sync status traces as green `[INFO]` logs instead of errors.
 9. **Environment Configuration Viewer:** Displays all active environment variables inside a mathematically precise 50/50 vertical partition matching the log terminal height, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
 
