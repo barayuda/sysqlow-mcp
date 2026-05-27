@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, basename } from "path";
-import { analyzeCodebaseWithLLM, LearnedKnowledgeItem } from "./llm";
+import { analyzeCodebaseWithLLM, LearnedKnowledgeItem, generateEmbedding } from "./llm";
 import { client, isEmbeddedReplica } from "./db";
 
 export interface CodebaseAnalysisResult {
@@ -141,13 +141,27 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
       args: [item.content, item.topic, normalizedCategory],
     });
 
-    if (Number(updateRes.rowsAffected ?? 0) === 0) {
+    let targetId = "";
+    if (Number(updateRes.rowsAffected ?? 0) > 0) {
+      const row = await client.execute({
+        sql: "SELECT id FROM technical_knowledge WHERE topic = ? AND category = ?",
+        args: [item.topic, normalizedCategory]
+      });
+      if (row.rows.length > 0) {
+        targetId = String(row.rows[0].id);
+      }
+    } else {
       const id = crypto.randomUUID();
       await client.execute({
         sql: `INSERT INTO technical_knowledge (id, topic, content, category, is_validated, confidence_score)
               VALUES (?, ?, ?, ?, 1, 10)`,
         args: [id, item.topic, item.content, normalizedCategory],
       });
+      targetId = id;
+    }
+
+    if (targetId) {
+      generateAndSaveEmbedding(targetId, item.topic, item.content).catch(() => {});
     }
   }
 
@@ -162,4 +176,18 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
     detectedFiles,
     snippets
   };
+}
+
+async function generateAndSaveEmbedding(id: string, topic: string, content: string) {
+  try {
+    const vector = await generateEmbedding(`${topic}\n${content}`);
+    if (vector && vector.length > 0) {
+      await client.execute({
+        sql: "INSERT OR REPLACE INTO technical_knowledge_embeddings (id, embedding) VALUES (?, ?)",
+        args: [id, JSON.stringify(vector)]
+      });
+    }
+  } catch (err: any) {
+    console.error(`[Embedding Auto] Failed to generate embedding for topic "${topic}": ${err.message}`);
+  }
 }

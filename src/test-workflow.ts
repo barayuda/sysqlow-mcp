@@ -290,6 +290,21 @@ async function run() {
     }
     console.log("✔ parent-child link successfully verified in database");
 
+    console.log("\n[9b/10] Calling knowledge_workflow intent=semantic...");
+    const semanticResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: {
+        intent: "semantic",
+        query: "updated workflow content",
+        category: "Backend",
+      },
+    });
+    const semanticPayload = parseWorkflowPayload(semanticResp);
+    if (!semanticPayload || (semanticPayload.status !== "success" && semanticPayload.status !== "fallback_success")) {
+      throw new Error(`semantic intent did not succeed: ${JSON.stringify(semanticPayload)}`);
+    }
+    console.log(`✔ semantic intent success (count: ${semanticPayload.results?.length ?? 0})`);
+
     console.log("\n[10/10] Cleaning up test snippets...");
     const delChildResp = await request("tools/call", {
       name: "knowledge_workflow",

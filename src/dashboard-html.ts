@@ -206,6 +206,12 @@ export const dashboardHtml = `<!DOCTYPE html>
           </div>
         </div>
 
+        <!-- Project Filters (Option D) -->
+        <div id="project-filters-container" class="pt-3 border-t border-slate-500/10 dark:border-white/5 hidden">
+          <p class="font-outfit font-bold text-slate-700 dark:text-slate-200 text-xs mb-2 tracking-wide uppercase">Project Filters</p>
+          <div id="project-checkboxes" class="space-y-1.5 max-h-32 overflow-y-auto pr-1"></div>
+        </div>
+
         <!-- Layout Controls -->
         <div class="pt-3 border-t border-slate-500/10 dark:border-white/5 space-y-2.5">
           <div class="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-400 font-medium">
@@ -312,7 +318,7 @@ export const dashboardHtml = `<!DOCTYPE html>
             <p id="report-reasoning" class="text-slate-600 dark:text-slate-400"></p>
             <div id="report-diff-box" class="hidden">
               <span class="text-slate-500 dark:text-slate-400 block mb-1">Suggested Update Diff:</span>
-              <pre id="report-diff" class="p-3 rounded-lg bg-black text-red-400 font-mono text-[10px] leading-relaxed overflow-x-auto whitespace-pre-wrap border border-white/5"></pre>
+              <div id="report-diff" class="p-3 rounded-lg bg-[#05080f] font-mono text-[10px] leading-relaxed overflow-x-auto border border-slate-500/10 dark:border-white/5 space-y-0.5"></div>
             </div>
           </div>
         </div>
@@ -326,6 +332,12 @@ export const dashboardHtml = `<!DOCTYPE html>
   <script type="text/javascript">
     let network = null;
     let selectedNodeId = null;
+    let nodesDataSet = null;
+    let edgesDataSet = null;
+    let nodesView = null;
+    let edgesView = null;
+    let activeProjectFilters = new Set();
+    let discoveredProjects = new Set();
 
     // Theme Switcher core logic
     function setTheme(theme) {
@@ -401,6 +413,60 @@ export const dashboardHtml = `<!DOCTYPE html>
           network.setOptions({ physics: { enabled: false } });
         }
       }
+    }
+
+    function toggleProjectFilter(project) {
+      if (activeProjectFilters.has(project)) {
+        activeProjectFilters.delete(project);
+      } else {
+        activeProjectFilters.add(project);
+      }
+      
+      // Update checkbox visual states
+      const checkbox = document.querySelector(\`input[value="\${project}"]\`);
+      if (checkbox) {
+        checkbox.checked = activeProjectFilters.has(project);
+      }
+
+      if (nodesView) {
+        nodesView.refresh();
+      }
+      if (edgesView) {
+        edgesView.refresh();
+      }
+    }
+
+    function formatDiff(diffText) {
+      if (!diffText) return "";
+      
+      const lines = diffText.split("\\n");
+      return lines.map(line => {
+        let bgClass = "";
+        let textClass = "text-slate-350 dark:text-slate-300";
+        
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          bgClass = "bg-emerald-500/10 dark:bg-emerald-500/20 border-l-2 border-emerald-500 pl-1.5";
+          textClass = "text-emerald-600 dark:text-emerald-400 font-medium";
+        } else if (line.startsWith("-") && !line.startsWith("---")) {
+          bgClass = "bg-rose-500/10 dark:bg-rose-500/20 border-l-2 border-rose-500 pl-1.5";
+          textClass = "text-rose-600 dark:text-rose-400 font-medium";
+        } else if (line.startsWith("@@")) {
+          bgClass = "bg-blue-500/5 dark:bg-blue-500/10 pl-1.5";
+          textClass = "text-blue-500 dark:text-blue-400 font-semibold";
+        } else if (line.startsWith("---") || line.startsWith("+++")) {
+          bgClass = "bg-slate-500/5 dark:bg-white/5 pl-1.5";
+          textClass = "text-slate-500 dark:text-slate-400 font-semibold";
+        } else {
+          bgClass = "pl-2";
+        }
+        
+        const escapedLine = line
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+          
+        return \`<div class="\${bgClass} \${textClass} py-0.5 min-h-[1.5rem]">\${escapedLine}</div>\`;
+      }).join("");
     }
 
     // B. Fetch Graph Data
@@ -517,11 +583,82 @@ export const dashboardHtml = `<!DOCTYPE html>
           };
         });
 
-        // Load Vis.js network
+        // Option D: Project Filters parsing
+        const projects = new Set();
+        data.nodes.forEach(n => {
+          const labelStr = n.label || "";
+          const parts = labelStr.split(":");
+          if (parts.length > 1) {
+            projects.add(parts[0].trim());
+          }
+        });
+
+        // Initialize active filters on first load or when new projects are discovered
+        let hasNewProjects = false;
+        projects.forEach(p => {
+          if (!discoveredProjects.has(p)) {
+            discoveredProjects.add(p);
+            activeProjectFilters.add(p);
+            hasNewProjects = true;
+          }
+        });
+
+        // Clean up project filters that no longer exist
+        activeProjectFilters.forEach(p => {
+          if (!projects.has(p)) {
+            activeProjectFilters.delete(p);
+            discoveredProjects.delete(p);
+            hasNewProjects = true;
+          }
+        });
+
+        // Render project checkboxes if there are projects
+        const filterContainer = document.getElementById("project-filters-container");
+        const checkboxList = document.getElementById("project-checkboxes");
+        if (projects.size > 0) {
+          filterContainer.classList.remove("hidden");
+          if (hasNewProjects || checkboxList.innerHTML === "") {
+            checkboxList.innerHTML = Array.from(projects).sort().map(proj => {
+              const isChecked = activeProjectFilters.has(proj) ? "checked" : "";
+              return \`
+                <label class="flex items-center space-x-2 text-[10px] text-slate-655 dark:text-slate-400 cursor-pointer font-medium hover:text-slate-800 dark:hover:text-white transition">
+                  <input type="checkbox" value="\${proj}" \${isChecked} onchange="toggleProjectFilter('\${proj}')" class="rounded border-slate-500/20 text-brand-500 focus:ring-brand-500">
+                  <span class="truncate">\${proj}</span>
+                </label>
+              \`;
+            }).join("");
+          }
+        } else {
+          filterContainer.classList.add("hidden");
+          checkboxList.innerHTML = "";
+        }
+
+        // Load Vis.js network using DataView for real-time filter reactivity
         const container = document.getElementById("mynetwork");
+        nodesDataSet = new vis.DataSet(visNodes);
+        edgesDataSet = new vis.DataSet(visEdges);
+
+        nodesView = new vis.DataView(nodesDataSet, {
+          filter: function(item) {
+            const labelStr = item.payload.label || "";
+            const parts = labelStr.split(":");
+            if (parts.length > 1) {
+              const prefix = parts[0].trim();
+              return activeProjectFilters.has(prefix);
+            }
+            return true;
+          }
+        });
+
+        edgesView = new vis.DataView(edgesDataSet, {
+          filter: function(item) {
+            return nodesView.get(item.from) !== null && nodesView.get(item.to) !== null;
+          }
+        });
+
         const networkData = {
-          nodes: new vis.DataSet(visNodes),
-          edges: new vis.DataSet(visEdges)
+          nodes: nodesView,
+          edges: edgesView
         };
         const options = {
           physics: {
@@ -651,7 +788,7 @@ export const dashboardHtml = `<!DOCTYPE html>
           
           const diffBox = document.getElementById("report-diff-box");
           if (rep.suggested_diff) {
-            document.getElementById("report-diff").innerText = rep.suggested_diff;
+            document.getElementById("report-diff").innerHTML = formatDiff(rep.suggested_diff);
             diffBox.classList.remove("hidden");
           } else {
             diffBox.classList.add("hidden");

@@ -122,6 +122,19 @@ export async function initDatabase() {
       // Column already exists, ignore error
     }
 
+    // Auto-migration: safely create embeddings table in existing databases if missing
+    try {
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS technical_knowledge_embeddings (
+          id TEXT PRIMARY KEY REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+          embedding TEXT NOT NULL
+        )
+      `);
+      console.error("[DB Migration] Successfully verified technical_knowledge_embeddings table.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Failed to create embeddings table: ${err.message}`);
+    }
+
     // Force replica sync to push DDL schema creations to primary cloud
     if (isEmbeddedReplica) {
       console.error("Pushing database schema changes to cloud primary...");

@@ -37,3 +37,9 @@ CREATE TRIGGER IF NOT EXISTS technical_knowledge_au AFTER UPDATE ON technical_kn
     INSERT INTO technical_knowledge_fts(id, topic, content, category)
     VALUES (new.id, new.topic, new.content, new.category);
 END;
+
+-- Embeddings table for semantic vector search
+CREATE TABLE IF NOT EXISTS technical_knowledge_embeddings (
+    id TEXT PRIMARY KEY REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+    embedding TEXT NOT NULL
+);

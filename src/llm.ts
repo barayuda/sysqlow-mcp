@@ -76,7 +76,7 @@ Evaluate if the stored snippet is:
 Provide a JSON object containing:
 - "status": exactly one of "up_to_date", "outdated", or "incorrect".
 - "reasoning": a clear, detailed explanation comparing the stored snippet with modern docs. Mention specific version numbers or changes.
-- "suggested_diff": if the status is "outdated" or "incorrect", provide a git-style diff or text replacement to update the content. If "up_to_date", set this to null.
+- "suggested_diff": if the status is "outdated" or "incorrect", provide a clean, standard Git-style unified diff representation (e.g. using "--- old\n+++ new\n" lines with - and + markers) mapping out the precise text transitions to update the stored snippet's content. If "up_to_date", set this to null.
 - "source_url": the absolute URL of the best reference source used for the validation.
 - "confidence_score": integer from 1 to 10 representing your certainty.
 
@@ -201,6 +201,42 @@ async function runOpenAIJSONGeneric<T>(prompt: string, apiKey: string): Promise<
     throw new Error(`JSON Parse error: ${e.message}`);
   }
 }
+export interface ImportedDocumentation {
+  topic: string;
+  content: string;
+}
+
+export async function extractDocumentationWithLLM(
+  url: string,
+  rawContent: string
+): Promise<ImportedDocumentation> {
+  const geminiKey = process.env.GEMINI_API_KEY;
+  const openAIKey = process.env.OPENAI_API_KEY;
+
+  const prompt = `You are a world-class documentation ingestion bot.
+Analyze the following raw documentation stream crawled from the URL "${url}".
+Your task is to extract key architectural principles, configuration parameters, key concepts, standard commands, and boilerplates/code blocks from this content, and organize it as a single, beautifully structured Markdown snippet.
+
+Raw crawled stream:
+"""
+${rawContent}
+"""
+
+Produce a JSON object containing:
+- "topic": A descriptive, professional title for the documentation (e.g. "Laravel: Query Builder", "Vite: CSS Options", "Turso: Local Replicas").
+- "content": A clean, comprehensive Markdown block representing the structured documentation. Make sure to preserve code blocks, arguments, and details.
+
+Your response MUST be valid JSON matching this schema exactly.
+IMPORTANT: All backslashes (\\\\) in string values (such as paths, namespaces, or escapes in code blocks) MUST be double-escaped to ensure the JSON is valid.`;
+
+  if (geminiKey) {
+    return await runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey);
+  } else if (openAIKey) {
+    return await runOpenAIJSONGeneric<ImportedDocumentation>(prompt, openAIKey);
+  }
+
+  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
+}
 
 export interface LearnedKnowledgeItem {
   topic: string;
@@ -253,13 +289,13 @@ IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces)
 }
 
 async function embedGemini(text: string, apiKey: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
   
   const res = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: "models/text-embedding-004",
+      model: "models/gemini-embedding-001",
       content: { parts: [{ text }] }
     })
   });
