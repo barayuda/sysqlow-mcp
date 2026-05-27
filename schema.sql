@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS technical_knowledge (
     topic TEXT NOT NULL,           -- Subject (e.g., "Laravel Rate Limiting")
     content TEXT NOT NULL,         -- The technical snippet/tip
     category TEXT,                 -- (e.g., "Backend", "Frontend", "DevOps")
+    parent_id TEXT REFERENCES technical_knowledge(id) ON DELETE SET NULL, -- Parent snippet for hierarchy
     is_validated BOOLEAN DEFAULT FALSE,
     last_validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     source_url TEXT,               -- The URL used for validation

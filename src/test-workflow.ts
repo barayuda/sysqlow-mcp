@@ -247,29 +247,74 @@ async function run() {
       throw new Error("Expected is_validated=1 after apply intent");
     }
 
-    console.log("\n[8/8] Calling knowledge_workflow intent=delete...");
-    const deleteResp = await request("tools/call", {
+    console.log("\n[8/10] Calling knowledge_workflow intent=save (for child snippet)...");
+    const childSaveResp = await request("tools/call", {
       name: "knowledge_workflow",
       arguments: {
-        intent: "delete",
-        id: savedId,
+        intent: "save",
+        topic: `${testTopic} - Child Segment`,
+        content: `Subtopic details for ${testQuery}`,
+        category: "Backend",
       },
     });
-    const deletePayload = parseWorkflowPayload(deleteResp);
-    if (!deletePayload || deletePayload.status !== "success" || deletePayload.id !== savedId) {
-      throw new Error(`delete intent did not succeed: ${JSON.stringify(deletePayload)}`);
+    const childSavePayload = parseWorkflowPayload(childSaveResp);
+    if (!childSavePayload || childSavePayload.status !== "success") {
+      throw new Error(`child save intent did not succeed: ${JSON.stringify(childSavePayload)}`);
     }
-    console.log(`✔ delete intent success (deleted: ${deletePayload.topic})`);
+    const childId = childSavePayload.id;
+    console.log(`✔ child save intent success (id: ${childId})`);
 
-    // Verify deletion in database
-    const dbDeleted = await client.execute({
-      sql: "SELECT id FROM technical_knowledge WHERE id = ?",
-      args: [savedId],
+    console.log("\n[9/10] Calling knowledge_workflow intent=merge (link mode)...");
+    const mergeResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: {
+        intent: "merge",
+        parentId: savedId,
+        childId: childId,
+        mode: "link_child",
+      },
     });
-    if (dbDeleted.rows.length > 0) {
-      throw new Error("Snippet was not deleted from database");
+    const mergePayload = parseWorkflowPayload(mergeResp);
+    if (!mergePayload || mergePayload.status !== "success" || mergePayload.childId !== childId) {
+      throw new Error(`merge intent did not succeed: ${JSON.stringify(mergePayload)}`);
     }
-    console.log("✔ deletion successfully verified in database");
+    console.log(`✔ merge intent success (linked: ${mergePayload.childTopic} -> ${mergePayload.parentTopic})`);
+
+    // Verify parent_id in database
+    const dbLinked = await client.execute({
+      sql: "SELECT parent_id FROM technical_knowledge WHERE id = ?",
+      args: [childId],
+    });
+    if (dbLinked.rows.length === 0 || dbLinked.rows[0].parent_id !== savedId) {
+      throw new Error("Parent-child hierarchy link was not successfully written to database");
+    }
+    console.log("✔ parent-child link successfully verified in database");
+
+    console.log("\n[10/10] Cleaning up test snippets...");
+    const delChildResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: { intent: "delete", id: childId },
+    });
+    const delParentResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: { intent: "delete", id: savedId },
+    });
+    
+    const delChildPayload = parseWorkflowPayload(delChildResp);
+    const delParentPayload = parseWorkflowPayload(delParentResp);
+    if (!delChildPayload || delChildPayload.status !== "success" || !delParentPayload || delParentPayload.status !== "success") {
+      throw new Error("Cleanup of child or parent snippet failed");
+    }
+
+    // Verify both deletions in database
+    const dbDeletedCheck = await client.execute({
+      sql: "SELECT id FROM technical_knowledge WHERE id IN (?, ?)",
+      args: [childId, savedId],
+    });
+    if (dbDeletedCheck.rows.length > 0) {
+      throw new Error("Snippets were not successfully deleted from database");
+    }
+    console.log("✔ cleanup and sequential deletions successfully verified in database");
 
     console.log("\n🎉 SUCCESS: knowledge_workflow integration test passed");
     process.exit(0);

@@ -114,6 +114,14 @@ export async function initDatabase() {
       console.error("Database schema initialized successfully.");
     }
 
+    // Auto-migration: safely add parent_id column to existing databases if it is missing
+    try {
+      await client.execute("ALTER TABLE technical_knowledge ADD COLUMN parent_id TEXT REFERENCES technical_knowledge(id) ON DELETE SET NULL");
+      console.error("[DB Migration] Successfully added parent_id column to existing technical_knowledge table.");
+    } catch (_) {
+      // Column already exists, ignore error
+    }
+
     // Force replica sync to push DDL schema creations to primary cloud
     if (isEmbeddedReplica) {
       console.error("Pushing database schema changes to cloud primary...");

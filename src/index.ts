@@ -470,7 +470,7 @@ server.addTool({
         message: `Snippet "${topic}" has been successfully deleted.`,
         id
       }, null, 2);
-    } catch (error: any) {
+} catch (error: any) {
       console.error(`Error in delete_knowledge for ID "${id}": ${error.message}`);
       return JSON.stringify({
         status: "error",
@@ -480,19 +480,109 @@ server.addTool({
   }
 });
 
+// Tool 9: merge_knowledge
+server.addTool({
+  name: "merge_knowledge",
+  description: "Merges two snippets: either merges contents into parent and deletes child, or links child to parent hierarchically.",
+  parameters: z.object({
+    parentId: z.string().describe("The UUID of the parent snippet."),
+    childId: z.string().describe("The UUID of the child snippet to merge or link."),
+    mode: z.enum(["merge_content", "link_child"]).describe("Merge mode: merge content (deletes child) or link hierarchically."),
+  }),
+  execute: async (args) => {
+    const parentId = args.parentId.trim();
+    const childId = args.childId.trim();
+    const mode = args.mode;
+
+    try {
+      const parentRes = await client.execute({
+        sql: "SELECT topic, content, category FROM technical_knowledge WHERE id = ?",
+        args: [parentId]
+      });
+      const childRes = await client.execute({
+        sql: "SELECT topic, content FROM technical_knowledge WHERE id = ?",
+        args: [childId]
+      });
+
+      if (parentRes.rows.length === 0) {
+        return JSON.stringify({ status: "error", message: `Parent snippet with ID "${parentId}" does not exist.` }, null, 2);
+      }
+      if (childRes.rows.length === 0) {
+        return JSON.stringify({ status: "error", message: `Child snippet with ID "${childId}" does not exist.` }, null, 2);
+      }
+
+      const parentTopic = parentRes.rows[0].topic as string;
+      const childTopic = childRes.rows[0].topic as string;
+      const parentContent = parentRes.rows[0].content as string;
+      const childContent = childRes.rows[0].content as string;
+
+      if (mode === "merge_content") {
+        const mergedContent = `${parentContent}\n\n---\n### 🔗 Merged Subtopic: ${childTopic}\n${childContent}`;
+        
+        await client.execute({
+          sql: "UPDATE technical_knowledge SET content = ?, is_validated = 0 WHERE id = ?",
+          args: [mergedContent, parentId]
+        });
+
+        await client.execute({
+          sql: "DELETE FROM technical_knowledge WHERE id = ?",
+          args: [childId]
+        });
+
+        if (isEmbeddedReplica) {
+          client.sync().catch((err: any) => console.error(`Replication sync error in merge/content: ${err.message}`));
+        }
+
+        return JSON.stringify({
+          status: "success",
+          mode,
+          parentId,
+          parentTopic,
+          message: `Snippet "${childTopic}" content has been successfully merged into "${parentTopic}". Child snippet deleted.`
+        }, null, 2);
+      } else {
+        await client.execute({
+          sql: "UPDATE technical_knowledge SET parent_id = ? WHERE id = ?",
+          args: [parentId, childId]
+        });
+
+        if (isEmbeddedReplica) {
+          client.sync().catch((err: any) => console.error(`Replication sync error in merge/link: ${err.message}`));
+        }
+
+        return JSON.stringify({
+          status: "success",
+          mode,
+          parentId,
+          childId,
+          parentTopic,
+          childTopic,
+          message: `Snippet "${childTopic}" is now linked as a child sub-topic of "${parentTopic}".`
+        }, null, 2);
+      }
+    } catch (error: any) {
+      console.error(`Error in merge_knowledge: ${error.message}`);
+      return JSON.stringify({ status: "error", message: `Merge failed: ${error.message}` }, null, 2);
+    }
+  }
+});
+
 // Tool 6: knowledge_workflow
 server.addTool({
   name: "knowledge_workflow",
   description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
   parameters: z.object({
-    intent: z.enum(["learn", "save", "search", "validate", "apply", "list", "delete"]).describe("Workflow intent to execute."),
+    intent: z.enum(["learn", "save", "search", "validate", "apply", "list", "delete", "merge"]).describe("Workflow intent to execute."),
     projectPath: z.string().optional().describe("Used by intent=learn."),
     topic: z.string().optional().describe("Used by intent=save."),
     content: z.string().optional().describe("Used by intent=save or intent=apply."),
     query: z.string().optional().describe("Used by intent=search."),
     category: z.string().optional().describe("Optional category for save/search."),
-    id: z.string().optional().describe("Used by intent=validate or intent=apply."),
+    id: z.string().optional().describe("Used by intent=validate or intent=apply or intent=delete."),
     revalidateBeforeCommit: z.boolean().optional().describe("Used by intent=apply. Defaults to true."),
+    parentId: z.string().optional().describe("Used by intent=merge."),
+    childId: z.string().optional().describe("Used by intent=merge."),
+    mode: z.enum(["merge_content", "link_child"]).optional().describe("Used by intent=merge. Defaults to link_child."),
   }),
   execute: async (args) => {
     const intent = args.intent;
@@ -741,6 +831,87 @@ server.addTool({
         }, null, 2);
       }
 
+      if (intent === "merge") {
+        const parentId = args.parentId?.trim();
+        const childId = args.childId?.trim();
+        const mode = args.mode || "link_child";
+
+        if (!parentId || !childId) {
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=merge, both parentId and childId are required."
+          }, null, 2);
+        }
+
+        const parentRes = await client.execute({
+          sql: "SELECT topic, content FROM technical_knowledge WHERE id = ?",
+          args: [parentId]
+        });
+        const childRes = await client.execute({
+          sql: "SELECT topic, content FROM technical_knowledge WHERE id = ?",
+          args: [childId]
+        });
+
+        if (parentRes.rows.length === 0) {
+          return JSON.stringify({ status: "error", message: `Parent snippet with ID "${parentId}" does not exist.` }, null, 2);
+        }
+        if (childRes.rows.length === 0) {
+          return JSON.stringify({ status: "error", message: `Child snippet with ID "${childId}" does not exist.` }, null, 2);
+        }
+
+        const parentTopic = parentRes.rows[0].topic as string;
+        const childTopic = childRes.rows[0].topic as string;
+        const parentContent = parentRes.rows[0].content as string;
+        const childContent = childRes.rows[0].content as string;
+
+        if (mode === "merge_content") {
+          const mergedContent = `${parentContent}\n\n---\n### 🔗 Merged Subtopic: ${childTopic}\n${childContent}`;
+          
+          await client.execute({
+            sql: "UPDATE technical_knowledge SET content = ?, is_validated = 0 WHERE id = ?",
+            args: [mergedContent, parentId]
+          });
+
+          await client.execute({
+            sql: "DELETE FROM technical_knowledge WHERE id = ?",
+            args: [childId]
+          });
+
+          if (isEmbeddedReplica) {
+            client.sync().catch((err: any) => console.error(`Replication sync error in workflow/merge/content: ${err.message}`));
+          }
+
+          return JSON.stringify({
+            status: "success",
+            intent,
+            mode,
+            parentId,
+            parentTopic,
+            message: `Snippet "${childTopic}" content has been successfully merged into "${parentTopic}". Child snippet deleted.`
+          }, null, 2);
+        } else {
+          await client.execute({
+            sql: "UPDATE technical_knowledge SET parent_id = ? WHERE id = ?",
+            args: [parentId, childId]
+          });
+
+          if (isEmbeddedReplica) {
+            client.sync().catch((err: any) => console.error(`Replication sync error in workflow/merge/link: ${err.message}`));
+          }
+
+          return JSON.stringify({
+            status: "success",
+            intent,
+            mode,
+            parentId,
+            childId,
+            parentTopic,
+            childTopic,
+            message: `Snippet "${childTopic}" is now linked as a child sub-topic of "${parentTopic}".`
+          }, null, 2);
+        }
+      }
+
       return JSON.stringify({
         status: "error",
         message: `Unsupported workflow intent: ${intent}`
@@ -821,7 +992,7 @@ app.get("/", async (c) => {
 app.get("/api/graph", async (c) => {
   try {
     const res = await client.execute({
-      sql: `SELECT id, topic, content, category, is_validated, confidence_score, last_validated_at, source_url 
+      sql: `SELECT id, topic, content, category, parent_id, is_validated, confidence_score, last_validated_at, source_url 
             FROM technical_knowledge`,
       args: []
     });
@@ -830,6 +1001,7 @@ app.get("/api/graph", async (c) => {
       id: r.id,
       label: r.topic,
       category: r.category || "None",
+      parent_id: r.parent_id || null,
       validated: r.is_validated,
       confidence: r.confidence_score,
       last_validated: r.last_validated_at,
@@ -888,6 +1060,21 @@ app.get("/api/graph", async (c) => {
             arrows: "to"
           });
         }
+      }
+    }
+
+    // Add Parent-Child hierarchy edges
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.parent_id) {
+        edges.push({
+          from: node.id,
+          to: node.parent_id,
+          label: "Hierarchy",
+          arrows: "to",
+          color: { color: "#a855f7", highlight: "#c084fc", hover: "#a855f7" }, // Premium purple edge
+          width: 3
+        });
       }
     }
 
