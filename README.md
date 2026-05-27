@@ -36,7 +36,7 @@ graph TD
 
 ## 🔌 MCP Tools Specification & Usage Guides
 
-SysQlow-MCP exposes six highly optimized, Zod-validated tools. 
+SysQlow-MCP exposes 11 highly optimized, Zod-validated tools. 
 
 ---
 
@@ -160,20 +160,43 @@ Saves an approved update to a stored snippet. This is the **Human-in-the-loop** 
 High-level orchestration tool for intent-first prompting. It helps clients auto-route requests without always mentioning specific tool names.
 
 * **Parameters:**
-  * `intent` (enum, required): `learn` | `save` | `search` | `validate` | `apply`
+  * `intent` (enum, required): `learn` | `save` | `search` | `validate` | `apply` | `delete` | `merge` | `semantic` | `import`
   * `projectPath` (string, optional): Used by `learn`
   * `topic`, `content`, `category` (optional fields): Used by `save`
-  * `query`, `category` (optional fields): Used by `search`
-  * `id` (string, optional): Used by `validate` and `apply`
+  * `query`, `category` (optional fields): Used by `search` or `semantic`
+  * `id` (string, optional): Used by `validate`, `apply`, or `delete`
   * `content` (string, optional): Used by `apply`
   * `revalidateBeforeCommit` (boolean, optional): Used by `apply` (default `true`)
+  * `parentId`, `childId`, `mode` (optional fields): Used by `merge`
+  * `url` (string, optional): Used by `import`
 * **How to use it:**
   Ask your IDE assistant with intent language:
   > *"Analyze this workspace and store project context."*
   > *"Save this snippet under Backend."*
   > *"Search my knowledge base for rate limiting."*
-  > *"Audit snippet ID ..."*
-  > *"Apply approved update for snippet ID ..."*
+  > *"Semantic search my cache options in category Backend."*
+  > *"Scrape and import documentation from https://example.com/docs..."*
+  > *"Link snippet child-id as a subtopic under parent-id..."*
+
+---
+
+### 7. `semantic_search`
+Performs conceptual, high-fidelity vector similarity search on stored knowledge snippets using cosine similarity calculations.
+
+* **Parameters:**
+  * `query` (string, required): The search term or concept to query (e.g. `"caching databases"`).
+  * `category` (string, optional): Optional category filter.
+  * `limit` (number, optional): Max number of matches to return (default 5).
+* **Graceful Degradation:** If Gemini embedding API limits are exhausted, the tool automatically degrades gracefully into FTS5 keyword indexing or standard SQL `LIKE` lookups.
+
+---
+
+### 8. `import_documentation`
+Scrapes external HTML documentation, converts the sanitized text stream into a structured Markdown snippet using Gemini, and saves it in the database.
+
+* **Parameters:**
+  * `url` (string, required): The URL of the technical documentation to scrape and import.
+  * `category` (string, optional): Category to store the snippet under (defaults to `"Backend"`).
 
 ---
 
@@ -340,9 +363,12 @@ Once the server is running in SSE mode, open your browser and visit:
    * **Segmented Toggle Bar:** A glassmorphic theme selector inside the header allows you to seamlessly switch between Light, Dark, and System-synced modes (which actively tracks and responds to OS-level color scheme changes in real-time).
    * **Saved Preferences:** Appearance settings are persisted inside `localStorage` across refreshes and restarts.
    * **Dynamic Canvas Contrast Adaptions:** Swapping themes automatically recalibrates Vis.js canvas render colors (drawing high-contrast dark-slate edges and text labels in Light Mode, and glowing semi-transparent white elements in Dark Mode) to prevent edge washout or readability degradation.
-4. **Sentinel Manual Audit Controls:** Click any node to open the dense, high-contrast details sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
-5. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server operations, automatically classifying standard startup and database sync status traces as green `[INFO]` logs instead of errors.
-6. **Environment Configuration Viewer:** Displays all active environment variables inside a mathematically precise 50/50 vertical partition matching the log terminal height, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
+4. **Interactive Multi-Workspace Project Filters (Option D):** Checkbox selections inside the legend allow you to filter nodes and edges dynamically on the Vis.js canvas, instantly isolating project views without slow API calls.
+5. **AI-Generated Unified Refactoring Diffs (Option E):** If a snippet is outdated, the details drawer renders high-contrast, color-coded Git-style unified diff blocks, highlighting added lines in green and deleted lines in red.
+6. **Sentinel Manual Audit Controls:** Click any node to open the dense, high-contrast details sidebar and click "Trigger Sentinel Audit" to manually validate your snippet against live docs using Gemini in real-time.
+7. **Passive Background "Sentinel" Auditor (Option C):** Active in background SSE mode, this worker sweeps the database every 12 hours to automatically audit and sync outdated snippets.
+8. **Real-time MCP Log Terminal:** Monospaced, auto-scrolling terminal feed capturing all server operations, automatically classifying standard startup and database sync status traces as green `[INFO]` logs instead of errors.
+9. **Environment Configuration Viewer:** Displays all active environment variables inside a mathematically precise 50/50 vertical partition matching the log terminal height, safely redacting critical credentials (`GEMINI_API_KEY`, etc.).
 
 ---
 
