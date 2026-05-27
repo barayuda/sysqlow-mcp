@@ -1,11 +1,23 @@
 import { createClient } from "@libsql/client";
 import schemaSql from "../schema.sql" with { type: "text" };
+import fs from "node:fs";
+import path from "node:path";
 
 const dbUrl = process.env.TURSO_DATABASE_URL;
 const dbToken = process.env.TURSO_AUTH_TOKEN;
 
 // Configurable local SQLite file path, defaulting to sysqlow.db in the Cwd
 const localDbPath = process.env.LOCAL_DB_PATH || "sysqlow.db";
+
+// Ensure parent directory exists for the SQLite database file
+const cleanPath = localDbPath.startsWith("file:") ? localDbPath.slice(5) : localDbPath;
+if (cleanPath && cleanPath !== "sysqlow.db" && !cleanPath.startsWith(":memory:")) {
+  const dir = path.dirname(cleanPath);
+  if (dir && dir !== "." && !fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
 const localDbUrl = localDbPath.startsWith("file:") ? localDbPath : `file:${localDbPath}`;
 
 // Detect if we should use Turso's Embedded Replicas (local-first SQLite sync'd to cloud)
