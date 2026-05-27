@@ -247,6 +247,30 @@ async function run() {
       throw new Error("Expected is_validated=1 after apply intent");
     }
 
+    console.log("\n[8/8] Calling knowledge_workflow intent=delete...");
+    const deleteResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: {
+        intent: "delete",
+        id: savedId,
+      },
+    });
+    const deletePayload = parseWorkflowPayload(deleteResp);
+    if (!deletePayload || deletePayload.status !== "success" || deletePayload.id !== savedId) {
+      throw new Error(`delete intent did not succeed: ${JSON.stringify(deletePayload)}`);
+    }
+    console.log(`✔ delete intent success (deleted: ${deletePayload.topic})`);
+
+    // Verify deletion in database
+    const dbDeleted = await client.execute({
+      sql: "SELECT id FROM technical_knowledge WHERE id = ?",
+      args: [savedId],
+    });
+    if (dbDeleted.rows.length > 0) {
+      throw new Error("Snippet was not deleted from database");
+    }
+    console.log("✔ deletion successfully verified in database");
+
     console.log("\n🎉 SUCCESS: knowledge_workflow integration test passed");
     process.exit(0);
   } catch (err: any) {

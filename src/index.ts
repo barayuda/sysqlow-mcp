@@ -431,12 +431,61 @@ server.addTool({
   }
 });
 
+// Tool 8: delete_knowledge
+server.addTool({
+  name: "delete_knowledge",
+  description: "Deletes a stored technical snippet from the database by its UUID.",
+  parameters: z.object({
+    id: z.string().describe("The UUID of the snippet to delete."),
+  }),
+  execute: async (args) => {
+    const id = args.id.trim();
+    
+    try {
+      const checkRes = await client.execute({
+        sql: "SELECT topic FROM technical_knowledge WHERE id = ?",
+        args: [id]
+      });
+      
+      if (checkRes.rows.length === 0) {
+        return JSON.stringify({
+          status: "error",
+          message: `Snippet with ID "${id}" does not exist.`
+        }, null, 2);
+      }
+      
+      const topic = checkRes.rows[0].topic as string;
+      
+      await client.execute({
+        sql: "DELETE FROM technical_knowledge WHERE id = ?",
+        args: [id]
+      });
+      
+      if (isEmbeddedReplica) {
+        client.sync().catch((err: any) => console.error(`Replication sync error in delete: ${err.message}`));
+      }
+      
+      return JSON.stringify({
+        status: "success",
+        message: `Snippet "${topic}" has been successfully deleted.`,
+        id
+      }, null, 2);
+    } catch (error: any) {
+      console.error(`Error in delete_knowledge for ID "${id}": ${error.message}`);
+      return JSON.stringify({
+        status: "error",
+        message: `Failed to delete snippet: ${error.message}`
+      }, null, 2);
+    }
+  }
+});
+
 // Tool 6: knowledge_workflow
 server.addTool({
   name: "knowledge_workflow",
   description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
   parameters: z.object({
-    intent: z.enum(["learn", "save", "search", "validate", "apply", "list"]).describe("Workflow intent to execute."),
+    intent: z.enum(["learn", "save", "search", "validate", "apply", "list", "delete"]).describe("Workflow intent to execute."),
     projectPath: z.string().optional().describe("Used by intent=learn."),
     topic: z.string().optional().describe("Used by intent=save."),
     content: z.string().optional().describe("Used by intent=save or intent=apply."),
@@ -649,6 +698,46 @@ server.addTool({
           category,
           count: rows.length,
           results: rows
+        }, null, 2);
+      }
+
+      if (intent === "delete") {
+        const id = args.id?.trim();
+        if (!id) {
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=delete, id is required."
+          }, null, 2);
+        }
+
+        const checkRes = await client.execute({
+          sql: "SELECT topic FROM technical_knowledge WHERE id = ?",
+          args: [id]
+        });
+        if (checkRes.rows.length === 0) {
+          return JSON.stringify({
+            status: "error",
+            message: `Snippet with ID "${id}" does not exist.`
+          }, null, 2);
+        }
+
+        const topic = checkRes.rows[0].topic as string;
+
+        await client.execute({
+          sql: "DELETE FROM technical_knowledge WHERE id = ?",
+          args: [id]
+        });
+
+        if (isEmbeddedReplica) {
+          client.sync().catch((err: any) => console.error(`Replication sync error in workflow/delete: ${err.message}`));
+        }
+
+        return JSON.stringify({
+          status: "success",
+          intent,
+          id,
+          topic,
+          message: `Snippet "${topic}" has been successfully deleted.`
         }, null, 2);
       }
 
