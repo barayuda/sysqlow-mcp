@@ -380,12 +380,63 @@ ${snippetsSummary}`;
   }
 });
 
+// Tool 7: list_knowledge
+server.addTool({
+  name: "list_knowledge",
+  description: "Lists all stored technical snippets in your second brain, optionally filtered by category.",
+  parameters: z.object({
+    category: z.string().optional().describe("Optional category to filter the list."),
+  }),
+  execute: async (args) => {
+    const category = normalizeCategory(args.category);
+    
+    try {
+      let sql = `
+        SELECT id, topic, category, is_validated, confidence_score, created_at
+        FROM technical_knowledge
+      `;
+      const sqlArgs: any[] = [];
+      
+      if (category) {
+        sql += " WHERE category = ?";
+        sqlArgs.push(category);
+      }
+      
+      sql += " ORDER BY category ASC, topic ASC";
+      
+      const res = await client.execute({ sql, args: sqlArgs });
+      const rows = res.rows;
+      
+      if (rows.length === 0) {
+        return `🧠 Your second brain is currently empty${category ? ` in category "${category}"` : ""}. Use store_knowledge to add your first technical snippet!`;
+      }
+      
+      const header = `🧠 **Saved Second Brain: ${rows.length} Snippet(s) Found**\n\n` +
+                     `Use \`recall_knowledge\` with a specific query or ID to view the full content of any snippet.\n\n` +
+                     `| # | Topic | Category | Validated | Confidence | Created At |\n` +
+                     `|---|---|---|---|---|---|\n`;
+      
+      const tableRows = rows.map((r, idx) => {
+        const validatedEmoji = r.is_validated ? "✅" : "⚠️";
+        const confidenceStr = r.confidence_score ? `${r.confidence_score}/10` : "N/A";
+        const createdDate = String(r.created_at || "").substring(0, 10);
+        return `| ${idx + 1} | **${r.topic}** | \`${r.category || "None"}\` | ${validatedEmoji} | ${confidenceStr} | ${createdDate} |`;
+      }).join("\n");
+      
+      return header + tableRows;
+    } catch (error: any) {
+      console.error(`Error in list_knowledge: ${error.message}`);
+      return `Failed to list knowledge: ${error.message}`;
+    }
+  }
+});
+
 // Tool 6: knowledge_workflow
 server.addTool({
   name: "knowledge_workflow",
   description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
   parameters: z.object({
-    intent: z.enum(["learn", "save", "search", "validate", "apply"]).describe("Workflow intent to execute."),
+    intent: z.enum(["learn", "save", "search", "validate", "apply", "list"]).describe("Workflow intent to execute."),
     projectPath: z.string().optional().describe("Used by intent=learn."),
     topic: z.string().optional().describe("Used by intent=save."),
     content: z.string().optional().describe("Used by intent=save or intent=apply."),
@@ -571,6 +622,33 @@ server.addTool({
           revalidated_before_commit: revalidateBeforeCommit,
           validation_status: validationStatus,
           validation_confidence_score: validationConfidence
+        }, null, 2);
+      }
+
+      if (intent === "list") {
+        const category = normalizeCategory(args.category);
+        let sql = `
+          SELECT id, topic, category, is_validated, confidence_score, created_at
+          FROM technical_knowledge
+        `;
+        const sqlArgs: any[] = [];
+        
+        if (category) {
+          sql += " WHERE category = ?";
+          sqlArgs.push(category);
+        }
+        
+        sql += " ORDER BY category ASC, topic ASC";
+        
+        const res = await client.execute({ sql, args: sqlArgs });
+        const rows = res.rows;
+        
+        return JSON.stringify({
+          status: "success",
+          intent,
+          category,
+          count: rows.length,
+          results: rows
         }, null, 2);
       }
 

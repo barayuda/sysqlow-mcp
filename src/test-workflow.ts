@@ -218,6 +218,19 @@ async function run() {
     }
     console.log("✔ validate intent input-path executed as expected");
 
+    console.log("\n[7/7] Calling knowledge_workflow intent=list...");
+    const listResp = await request("tools/call", {
+      name: "knowledge_workflow",
+      arguments: {
+        intent: "list",
+      },
+    });
+    const listPayload = parseWorkflowPayload(listResp);
+    if (!listPayload || listPayload.status !== "success" || Number(listPayload.count) < 1) {
+      throw new Error(`list intent did not return expected results: ${JSON.stringify(listPayload)}`);
+    }
+    console.log(`✔ list intent success (count: ${listPayload.count})`);
+
     const dbUpdated = await client.execute({
       sql: "SELECT content, is_validated FROM technical_knowledge WHERE id = ?",
       args: [savedId],
