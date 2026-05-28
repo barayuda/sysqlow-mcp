@@ -56,6 +56,23 @@ const server = new FastMCP({
   version: "1.0.0",
 });
 
+async function resolveScope(scope: string | undefined): Promise<{ where: string; args: any[] }> {
+  if (scope === "all") return { where: "", args: [] };
+  if (scope === "generic") return { where: "AND project_id IS NULL", args: [] };
+  if (scope && scope !== "current") {
+    // explicit project UUID
+    return { where: "AND (project_id = ? OR project_id IS NULL)", args: [scope] };
+  }
+  // default = current
+  try {
+    const proj = await detectCurrentProject();
+    return { where: "AND (project_id = ? OR project_id IS NULL)", args: [proj.id] };
+  } catch (err) {
+    console.error("[resolveScope] detectCurrentProject failed; falling back to scope=all", err);
+    return { where: "", args: [] };
+  }
+}
+
 async function storeEmbeddingForSnippet(id: string, topic: string, content: string) {
   try {
     const combinedText = `${topic}\n${content}`;
@@ -204,29 +221,38 @@ server.addTool({
   parameters: z.object({
     query: z.string().describe("The search term or query to find snippets (e.g., 'rate limit')"),
     category: z.string().optional().describe("Optional category to filter results"),
+    projectScope: z.union([z.enum(["all", "current", "generic"]), z.string().uuid()]).optional()
+      .describe("'all' = no project filter; 'current' (default) = current project ∪ generic; 'generic' = generic only; or an explicit project UUID."),
   }),
   execute: async (args) => {
     const query = args.query.trim();
     const category = normalizeCategory(args.category);
-    
+    const scope = await resolveScope(args.projectScope);
+
     try {
       let rows: any[] = [];
-      
+
       // If query is "*" or empty, retrieve all knowledge snippets
       if (query === "*" || query === "") {
         let sql = `
-          SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
+          SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
           FROM technical_knowledge
+          WHERE 1=1
         `;
         const sqlArgs: any[] = [];
-        
+
         if (category) {
-          sql += " WHERE category = ?";
+          sql += " AND category = ?";
           sqlArgs.push(category);
         }
-        
+
+        if (scope.where) {
+          sql += " " + scope.where;
+          sqlArgs.push(...scope.args);
+        }
+
         sql += " ORDER BY created_at DESC";
-        
+
         const res = await client.execute({ sql, args: sqlArgs });
         rows = res.rows;
       } else {
@@ -234,39 +260,49 @@ server.addTool({
         try {
           const safeFtsQuery = buildSafeFtsQuery(query);
           let ftsSql = `
-            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
-            FROM technical_knowledge 
+            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+            FROM technical_knowledge
             WHERE id IN (
               SELECT id FROM technical_knowledge_fts WHERE technical_knowledge_fts MATCH ?
             )
           `;
           const ftsArgs: any[] = [safeFtsQuery];
-          
+
           if (category) {
             ftsSql += " AND category = ?";
             ftsArgs.push(category);
           }
-          
+
+          if (scope.where) {
+            ftsSql += " " + scope.where;
+            ftsArgs.push(...scope.args);
+          }
+
           const ftsRes = await client.execute({ sql: ftsSql, args: ftsArgs });
           rows = ftsRes.rows;
         } catch (ftsError: any) {
           console.error("FTS search failed or was not initialized, falling back to LIKE search:", ftsError.message);
         }
-        
+
         // Fallback to LIKE search if FTS returned nothing or threw an error
         if (rows.length === 0) {
           let likeSql = `
-            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
-            FROM technical_knowledge 
+            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+            FROM technical_knowledge
             WHERE (topic LIKE ? OR content LIKE ? OR category LIKE ?)
           `;
           const likeArgs: any[] = [`%${query}%`, `%${query}%`, `%${query}%`];
-          
+
           if (category) {
             likeSql += " AND category = ?";
             likeArgs.push(category);
           }
-          
+
+          if (scope.where) {
+            likeSql += " " + scope.where;
+            likeArgs.push(...scope.args);
+          }
+
           const likeRes = await client.execute({ sql: likeSql, args: likeArgs });
           rows = likeRes.rows;
         }
@@ -615,23 +651,31 @@ server.addTool({
     query: z.string().describe("The search term or conceptual phrase to query (e.g. 'caching databases')."),
     category: z.string().optional().describe("Optional category to filter results."),
     limit: z.number().optional().describe("Max number of matches to return. Defaults to 5."),
+    projectScope: z.union([z.enum(["all", "current", "generic"]), z.string().uuid()]).optional()
+      .describe("'all' = no project filter; 'current' (default) = current project ∪ generic; 'generic' = generic only; or an explicit project UUID."),
   }),
   execute: async (args) => {
     const query = args.query.trim();
     const category = normalizeCategory(args.category);
     const limit = args.limit ?? 5;
+    const scope = await resolveScope(args.projectScope);
+    // Aliased variant for queries that use `k` as alias for technical_knowledge
+    const scopeAliased = {
+      where: scope.where ? scope.where.replace(/\bproject_id\b/g, "k.project_id") : "",
+      args: scope.args,
+    };
 
     try {
       const queryVector = await generateEmbedding(query);
       if (!queryVector || queryVector.length === 0) {
         console.error("[Semantic Search] Failed to generate embedding for query. Falling back to keyword search...");
-        
+
         let rows: any[] = [];
         try {
           const safeFtsQuery = buildSafeFtsQuery(query);
           let ftsSql = `
-            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
-            FROM technical_knowledge 
+            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+            FROM technical_knowledge
             WHERE id IN (
               SELECT id FROM technical_knowledge_fts WHERE technical_knowledge_fts MATCH ?
             )
@@ -641,6 +685,10 @@ server.addTool({
             ftsSql += " AND category = ?";
             ftsArgs.push(category);
           }
+          if (scope.where) {
+            ftsSql += " " + scope.where;
+            ftsArgs.push(...scope.args);
+          }
           const ftsRes = await client.execute({ sql: ftsSql, args: ftsArgs });
           rows = ftsRes.rows;
         } catch {
@@ -649,14 +697,18 @@ server.addTool({
 
         if (rows.length === 0) {
           let likeSql = `
-            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score 
-            FROM technical_knowledge 
+            SELECT id, topic, content, category, is_validated, last_validated_at, source_url, confidence_score
+            FROM technical_knowledge
             WHERE (topic LIKE ? OR content LIKE ? OR category LIKE ?)
           `;
           const likeArgs: any[] = [`%${query}%`, `%${query}%`, `%${query}%`];
           if (category) {
             likeSql += " AND category = ?";
             likeArgs.push(category);
+          }
+          if (scope.where) {
+            likeSql += " " + scope.where;
+            likeArgs.push(...scope.args);
           }
           const likeRes = await client.execute({ sql: likeSql, args: likeArgs });
           rows = likeRes.rows;
@@ -675,11 +727,16 @@ server.addTool({
         SELECT k.id, k.topic, k.content, k.category, k.is_validated, k.confidence_score, e.embedding
         FROM technical_knowledge k
         JOIN technical_knowledge_embeddings e ON k.id = e.id
+        WHERE 1=1
       `;
       const sqlArgs: any[] = [];
       if (category) {
-        sql += " WHERE k.category = ?";
+        sql += " AND k.category = ?";
         sqlArgs.push(category);
+      }
+      if (scopeAliased.where) {
+        sql += " " + scopeAliased.where;
+        sqlArgs.push(...scopeAliased.args);
       }
 
       const dbRes = await client.execute({ sql, args: sqlArgs });
