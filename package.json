@@ -11,6 +11,7 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun --external fastmcp --external @libsql/client --external zod",
     "compile": "bun build ./src/index.ts --compile --outfile ./dist/sysqlow-mcp --external sury --external @valibot/to-json-schema --external effect --external arktype --external typia --external valibot",
     "test:workflow": "bun run src/test-workflow.ts",
+    "audit": "bun run scripts/audit-now.ts",
     "prepare": "husky || true"
   },
   "dependencies": {
