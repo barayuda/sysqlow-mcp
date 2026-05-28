@@ -199,3 +199,38 @@ export async function mergeProjects(keepId: string, dropId: string): Promise<{ s
 
   return { snippetsMoved, relationsMoved: 0 };
 }
+
+export async function reassignProject(snippetId: string, newProjectId: string | null): Promise<void> {
+  // Verify the snippet exists.
+  const existing = await client.execute({
+    sql: "SELECT id FROM technical_knowledge WHERE id = ?",
+    args: [snippetId],
+  });
+  if (existing.rows.length === 0) throw new Error(`reassignProject: snippet ${snippetId} not found`);
+
+  if (newProjectId !== null) {
+    const proj = await client.execute({
+      sql: "SELECT id FROM projects WHERE id = ?",
+      args: [newProjectId],
+    });
+    if (proj.rows.length === 0) throw new Error(`reassignProject: project ${newProjectId} not found`);
+  }
+
+  await client.execute({
+    sql: "UPDATE technical_knowledge SET project_id = ? WHERE id = ?",
+    args: [newProjectId, snippetId],
+  });
+
+  // Any relations that now violate the isolation invariant must be pruned.
+  await client.execute(`
+    DELETE FROM knowledge_relations
+    WHERE id IN (
+      SELECT kr.id FROM knowledge_relations kr
+      JOIN technical_knowledge s ON s.id = kr.source_id
+      JOIN technical_knowledge t ON t.id = kr.target_id
+      WHERE s.project_id IS NOT NULL
+        AND t.project_id IS NOT NULL
+        AND s.project_id != t.project_id
+    )
+  `);
+}

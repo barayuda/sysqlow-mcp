@@ -6,7 +6,7 @@ import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { cosineSimilarity } from "./search";
-import { detectCurrentProject, mergeProjects } from "./coherence";
+import { detectCurrentProject, mergeProjects, reassignProject } from "./coherence";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -872,6 +872,21 @@ server.addTool({
   execute: async ({ keep_id, drop_id }) => {
     const result = await mergeProjects(keep_id, drop_id);
     return `Merged ${result.snippetsMoved} snippet(s) from ${drop_id} into ${keep_id}.`;
+  },
+});
+
+server.addTool({
+  name: "reassign_project",
+  description: "Move a single snippet to a different project, or pass new_project_id=null to promote it to generic (shared across projects).",
+  parameters: z.object({
+    snippet_id: z.string().uuid(),
+    new_project_id: z.string().uuid().nullable(),
+  }),
+  execute: async ({ snippet_id, new_project_id }) => {
+    await reassignProject(snippet_id, new_project_id);
+    return new_project_id === null
+      ? `Promoted snippet ${snippet_id} to generic.`
+      : `Reassigned snippet ${snippet_id} to project ${new_project_id}.`;
   },
 });
 
