@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { canRelate } from "./coherence";
-import { beforeEach, afterEach } from "bun:test";
+import { beforeAll, beforeEach, afterEach } from "bun:test";
 import { detectCurrentProject, _setCwdForTests, _resetCwdForTests } from "./coherence";
 import { client, initDatabase } from "./db";
 import fs from "node:fs";
@@ -28,16 +28,32 @@ describe("canRelate", () => {
 describe("detectCurrentProject", () => {
   let tmpDir: string;
 
+  beforeAll(async () => {
+    await initDatabase();
+    // Scrub any leftover rows from previous polluted runs.
+    await client.execute({
+      sql: "DELETE FROM projects WHERE root_path LIKE ? OR name = 'legacy-app'",
+      args: ["%/sysqlow-test-%"],
+    });
+  }, 30000);
+
   beforeEach(async () => {
     process.env.LOCAL_DB_PATH = ":memory:";
     await initDatabase();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sysqlow-test-"));
   }, 30000);
 
-  afterEach(() => {
+  afterEach(async () => {
     _resetCwdForTests();
+    // Clean up any DB rows the tests inserted to avoid polluting the live Turso DB.
+    if (tmpDir) {
+      await client.execute({
+        sql: "DELETE FROM projects WHERE root_path = ? OR name = 'legacy-app'",
+        args: [tmpDir],
+      });
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  }, 30000);
 
   test("creates a new project row when called in a fresh workspace with package.json", async () => {
     fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify({ name: "fresh-app" }));
