@@ -180,3 +180,22 @@ export async function discoverRelations(opts?: { projectId?: string | null }): P
 
   return { inserted, skipped };
 }
+
+export async function mergeProjects(keepId: string, dropId: string): Promise<{ snippetsMoved: number; relationsMoved: number }> {
+  if (keepId === dropId) throw new Error("mergeProjects: keep_id and drop_id are identical");
+
+  const before = await client.execute({
+    sql: "SELECT COUNT(*) AS n FROM technical_knowledge WHERE project_id = ?",
+    args: [dropId],
+  });
+  const snippetsMoved = Number(before.rows[0].n);
+
+  await client.execute({
+    sql: "UPDATE technical_knowledge SET project_id = ? WHERE project_id = ?",
+    args: [keepId, dropId],
+  });
+  // Relations reference snippet ids (not project ids), so no edge rewrite is needed.
+  await client.execute({ sql: "DELETE FROM projects WHERE id = ?", args: [dropId] });
+
+  return { snippetsMoved, relationsMoved: 0 };
+}

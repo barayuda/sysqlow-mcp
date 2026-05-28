@@ -6,7 +6,7 @@ import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { cosineSimilarity } from "./search";
-import { detectCurrentProject } from "./coherence";
+import { detectCurrentProject, mergeProjects } from "./coherence";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -860,6 +860,19 @@ server.addTool({
       return JSON.stringify({ status: "error", message: `Documentation import failed: ${error.message}` }, null, 2);
     }
   }
+});
+
+server.addTool({
+  name: "merge_projects",
+  description: "Merge two projects: move all snippets from drop_id into keep_id, then delete drop_id. Use after audit_coherence flags a duplicate proto-project.",
+  parameters: z.object({
+    keep_id: z.string().uuid().describe("Project to retain."),
+    drop_id: z.string().uuid().describe("Project to absorb and delete."),
+  }),
+  execute: async ({ keep_id, drop_id }) => {
+    const result = await mergeProjects(keep_id, drop_id);
+    return `Merged ${result.snippetsMoved} snippet(s) from ${drop_id} into ${keep_id}.`;
+  },
 });
 
 // Tool 6: knowledge_workflow
