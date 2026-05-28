@@ -155,6 +155,14 @@ export const dashboardHtml = `<!DOCTYPE html>
         </button>
       </div>
 
+      <label class="flex items-center space-x-2 text-xs font-medium text-slate-600 dark:text-slate-300">
+        <span class="uppercase tracking-wide text-[10px] text-slate-500 dark:text-slate-400">Project</span>
+        <select id="projectFilter" onchange="applyProjectIdFilter()" class="px-2 py-1 rounded-lg bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 hover:bg-slate-500/10 dark:hover:bg-white/10 transition text-xs font-medium text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-brand-500">
+          <option value="all">All</option>
+          <option value="generic">Generic only</option>
+        </select>
+      </label>
+
       <button onclick="refreshData()" class="px-3.5 py-1.5 rounded-lg bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 hover:bg-slate-500/10 dark:hover:bg-white/10 transition text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center space-x-2">
         <svg class="w-4 h-4 text-slate-500 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.253 8H18"></path></svg>
         <span>Refresh</span>
@@ -338,6 +346,15 @@ export const dashboardHtml = `<!DOCTYPE html>
     let edgesView = null;
     let activeProjectFilters = new Set();
     let discoveredProjects = new Set();
+    let discoveredProjectIds = new Set();
+    let selectedProjectId = "all";
+
+    function applyProjectIdFilter() {
+      const sel = document.getElementById("projectFilter");
+      selectedProjectId = sel ? sel.value : "all";
+      if (nodesView) nodesView.refresh();
+      if (edgesView) edgesView.refresh();
+    }
 
     // Theme Switcher core logic
     function setTheme(theme) {
@@ -612,6 +629,53 @@ export const dashboardHtml = `<!DOCTYPE html>
           }
         });
 
+        // Task 19: populate the <select id="projectFilter"> from node.project_id.
+        const projectIdsSeen = new Set();
+        data.nodes.forEach(n => {
+          if (n.project_id) projectIdsSeen.add(n.project_id);
+        });
+        const sel = document.getElementById("projectFilter");
+        if (sel) {
+          let needsRebuild = false;
+          projectIdsSeen.forEach(pid => {
+            if (!discoveredProjectIds.has(pid)) {
+              discoveredProjectIds.add(pid);
+              needsRebuild = true;
+            }
+          });
+          discoveredProjectIds.forEach(pid => {
+            if (!projectIdsSeen.has(pid)) {
+              discoveredProjectIds.delete(pid);
+              needsRebuild = true;
+            }
+          });
+          if (needsRebuild) {
+            const prior = selectedProjectId;
+            sel.innerHTML = "";
+            const allOpt = document.createElement("option");
+            allOpt.value = "all";
+            allOpt.textContent = "All";
+            sel.appendChild(allOpt);
+            const genericOpt = document.createElement("option");
+            genericOpt.value = "generic";
+            genericOpt.textContent = "Generic only";
+            sel.appendChild(genericOpt);
+            Array.from(discoveredProjectIds).sort().forEach(pid => {
+              const opt = document.createElement("option");
+              opt.value = pid;
+              opt.textContent = String(pid).slice(0, 8) + "…";
+              sel.appendChild(opt);
+            });
+            // Restore prior selection if still valid, else reset to "all".
+            if (prior === "all" || prior === "generic" || discoveredProjectIds.has(prior)) {
+              sel.value = prior;
+            } else {
+              sel.value = "all";
+              selectedProjectId = "all";
+            }
+          }
+        }
+
         // Render project checkboxes if there are projects
         const filterContainer = document.getElementById("project-filters-container");
         const checkboxList = document.getElementById("project-checkboxes");
@@ -640,6 +704,15 @@ export const dashboardHtml = `<!DOCTYPE html>
 
         nodesView = new vis.DataView(nodesDataSet, {
           filter: function(item) {
+            // Project-ID dropdown filter (Task 19): composes with label-prefix filter below.
+            const pid = item.payload ? item.payload.project_id : null;
+            if (selectedProjectId === "generic") {
+              if (pid != null) return false;
+            } else if (selectedProjectId !== "all") {
+              // Show the selected project's nodes AND generic (project_id == null) nodes.
+              if (pid != null && pid !== selectedProjectId) return false;
+            }
+
             const labelStr = item.payload.label || "";
             const parts = labelStr.split(":");
             if (parts.length > 1) {
