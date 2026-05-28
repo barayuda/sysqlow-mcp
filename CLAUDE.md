@@ -25,6 +25,9 @@ bun run compile
 
 # Run workflow integration test
 bun run test:workflow
+
+# Offline coherence audit (no MCP server needed) — prints structural / semantic / re-discovery report
+bun audit
 ```
 
 ## Environment Variables
@@ -100,3 +103,7 @@ All categories are normalized through `normalizeCategory()` in `src/index.ts` be
 `store_knowledge` writes a non-NULL `project_id` for `Project Context` snippets; everything else stays generic.
 
 `recall_knowledge` and `semantic_search` accept a `projectScope` parameter (`"current"` default = current project ∪ generic, `"all"`, `"generic"`, or a project UUID).
+
+**Auto-schedule:** `runBackgroundCoherence("startup")` fires once 30 s after server start in both transports (stdio and SSE) — runs phase 1 + phase 3. In SSE mode it also piggybacks on the existing 12 h Sentinel cron. Phase 2 stays manual (judgment calls). Under Docker, `run-docker.sh` captures the host's invocation `$PWD` and passes it as `SYSQLOW_WORKSPACE_DIR` so `detectCurrentProject()` resolves to the user's workspace rather than `/app`.
+
+**End-user usage guide:** [`docs/coherence-usage.md`](docs/coherence-usage.md) covers the daily-use workflows, the four MCP tools, the offline `bun audit` script, and a troubleshooting table.
