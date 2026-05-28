@@ -6,7 +6,7 @@ import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { cosineSimilarity } from "./search";
-import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, _stashSuggestions, _loadSuggestions } from "./coherence";
+import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, runBackgroundCoherence, _stashSuggestions, _loadSuggestions } from "./coherence";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -1661,6 +1661,17 @@ if (transportMode === "httpStream") {
   console.error("SysQlow-MCP server started successfully!");
 }
 
+// Background Coherence Pass — runs once 30s after server start in BOTH transports.
+// This keeps the knowledge graph self-healing in stdio mode (where each MCP-client
+// session spawns a fresh server), without competing with the client's initial handshake.
+setTimeout(() => {
+  runBackgroundCoherence("startup").then(() => {
+    if (isEmbeddedReplica) {
+      client.sync().catch((err: any) => console.error(`[Coherence Daemon Warn] Sync failed after startup pass: ${err.message}`));
+    }
+  });
+}, 30_000);
+
 // Background Sentinel Cron Auditor (Option C)
 if (transportMode === "httpStream") {
   console.error("[Sentinel Daemon] Initializing background validation worker loop...");
@@ -1707,7 +1718,15 @@ if (transportMode === "httpStream") {
       if (isEmbeddedReplica) {
         client.sync().catch((err: any) => console.error(`[Sentinel Daemon Warn] Sync failed after daemon audit: ${err.message}`));
       }
-      
+
+      // Piggyback a coherence pass (phase 1 + 3) on every Sentinel cycle so SSE
+      // deployments keep the knowledge graph healthy at ~12h cadence without
+      // requiring a separate scheduler.
+      await runBackgroundCoherence("12h cron");
+      if (isEmbeddedReplica) {
+        client.sync().catch((err: any) => console.error(`[Coherence Daemon Warn] Sync failed after cron pass: ${err.message}`));
+      }
+
       console.error("[Sentinel Daemon] Audit cycle completed successfully.");
     } catch (err: any) {
       console.error(`[Sentinel Daemon Error] Background worker execution failed: ${err.message}`);

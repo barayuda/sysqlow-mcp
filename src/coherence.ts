@@ -445,3 +445,34 @@ export function _stashSuggestions(runId: string, list: Suggestion[]) {
 export function _loadSuggestions(runId: string): Suggestion[] | undefined {
   return suggestionStore.get(runId);
 }
+
+/**
+ * Background coherence pass: runs phase 1 (structural, auto-applies safe fixes)
+ * and phase 3 (re-discover edges). Intentionally skips phase 2 because semantic
+ * suggestions require user judgment.
+ *
+ * Safe to call repeatedly: phase 1 is idempotent, phase 3 uses INSERT OR IGNORE
+ * plus the isolation trigger, and any error is swallowed so the caller (server
+ * startup or Sentinel cron) never gets killed by an audit failure.
+ */
+export async function runBackgroundCoherence(label: string): Promise<void> {
+  try {
+    console.error(`[Coherence Daemon] (${label}) Phase 1 (structural)…`);
+    const p1 = await auditStructural(true);
+    console.error(
+      `[Coherence Daemon] (${label}) Phase 1 done: ` +
+      `unprefixed=${p1.unprefixedProjectContext.length}, ` +
+      `merged_proto_dupes=${p1.duplicateProtoProjects.length}, ` +
+      `orphan_relations=${p1.orphanRelations}`,
+    );
+
+    console.error(`[Coherence Daemon] (${label}) Phase 3 (re-discovery)…`);
+    const p3 = await discoverRelations();
+    console.error(
+      `[Coherence Daemon] (${label}) Phase 3 done: ` +
+      `inserted=${p3.inserted}, skipped_by_invariant=${p3.skipped}`,
+    );
+  } catch (err: any) {
+    console.error(`[Coherence Daemon Error] (${label}) ${err?.message ?? err}`);
+  }
+}
