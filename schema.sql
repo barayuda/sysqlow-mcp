@@ -43,3 +43,19 @@ CREATE TABLE IF NOT EXISTS technical_knowledge_embeddings (
     id TEXT PRIMARY KEY REFERENCES technical_knowledge(id) ON DELETE CASCADE,
     embedding TEXT NOT NULL
 );
+
+-- Projects table: identifies a workspace whose Project Context snippets cohere together.
+-- root_path is NULL for "proto-projects" created by topic-prefix migration; they get
+-- adopted in place the first time their workspace is opened.
+CREATE TABLE IF NOT EXISTS projects (
+    id             TEXT PRIMARY KEY,
+    name           TEXT NOT NULL,
+    root_path      TEXT UNIQUE,
+    detected_stack TEXT,
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Allows at most one orphan (proto) project per name; once adopted, the partial index no longer applies.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_orphan
+    ON projects(name) WHERE root_path IS NULL;
