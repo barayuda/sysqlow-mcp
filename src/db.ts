@@ -178,6 +178,39 @@ export async function initDatabase() {
       // Column already exists, ignore.
     }
 
+    // Auto-migration: create knowledge_relations + isolation trigger on existing databases
+    try {
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS knowledge_relations (
+          id            TEXT PRIMARY KEY,
+          source_id     TEXT NOT NULL REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+          target_id     TEXT NOT NULL REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+          relation_type TEXT NOT NULL,
+          weight        REAL NOT NULL,
+          created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(source_id, target_id, relation_type)
+        )
+      `);
+      await client.execute(`CREATE INDEX IF NOT EXISTS idx_relations_source ON knowledge_relations(source_id)`);
+      await client.execute(`CREATE INDEX IF NOT EXISTS idx_relations_target ON knowledge_relations(target_id)`);
+      await client.execute(`
+        CREATE TRIGGER IF NOT EXISTS enforce_relation_isolation
+        BEFORE INSERT ON knowledge_relations
+        WHEN (
+          (SELECT project_id FROM technical_knowledge WHERE id = NEW.source_id) IS NOT NULL
+          AND (SELECT project_id FROM technical_knowledge WHERE id = NEW.target_id) IS NOT NULL
+          AND (SELECT project_id FROM technical_knowledge WHERE id = NEW.source_id)
+             != (SELECT project_id FROM technical_knowledge WHERE id = NEW.target_id)
+        )
+        BEGIN
+          SELECT RAISE(ABORT, 'context_isolation_violation: cross-project relation forbidden');
+        END
+      `);
+      console.error("[DB Migration] Verified knowledge_relations table and isolation trigger.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Failed to create relations table: ${err.message}`);
+    }
+
     // Force replica sync to push DDL schema creations to primary cloud
     if (isEmbeddedReplica) {
       console.error("Pushing database schema changes to cloud primary...");
