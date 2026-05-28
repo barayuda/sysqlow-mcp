@@ -62,3 +62,30 @@ CREATE TABLE IF NOT EXISTS projects (
 -- Allows at most one orphan (proto) project per name; once adopted, the partial index no longer applies.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_orphan
     ON projects(name) WHERE root_path IS NULL;
+
+-- Materialized edges between snippets. Replaces on-demand brute-force similarity in /api/graph.
+CREATE TABLE IF NOT EXISTS knowledge_relations (
+    id            TEXT PRIMARY KEY,
+    source_id     TEXT NOT NULL REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+    target_id     TEXT NOT NULL REFERENCES technical_knowledge(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL,
+    weight        REAL NOT NULL,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_id, target_id, relation_type)
+);
+CREATE INDEX IF NOT EXISTS idx_relations_source ON knowledge_relations(source_id);
+CREATE INDEX IF NOT EXISTS idx_relations_target ON knowledge_relations(target_id);
+
+-- Context isolation invariant: a relation may exist only when at least one endpoint is
+-- generic (project_id IS NULL) OR both endpoints belong to the same project.
+CREATE TRIGGER IF NOT EXISTS enforce_relation_isolation
+BEFORE INSERT ON knowledge_relations
+WHEN (
+  (SELECT project_id FROM technical_knowledge WHERE id = NEW.source_id) IS NOT NULL
+  AND (SELECT project_id FROM technical_knowledge WHERE id = NEW.target_id) IS NOT NULL
+  AND (SELECT project_id FROM technical_knowledge WHERE id = NEW.source_id)
+     != (SELECT project_id FROM technical_knowledge WHERE id = NEW.target_id)
+)
+BEGIN
+  SELECT RAISE(ABORT, 'context_isolation_violation: cross-project relation forbidden');
+END;
