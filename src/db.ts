@@ -211,6 +211,35 @@ export async function initDatabase() {
       console.error(`[DB Migration Warn] Failed to create relations table: ${err.message}`);
     }
 
+    // One-time backfill: turn legacy "Project Context" rows into proto-projects so that
+    // existing data starts cohering before any new write happens.
+    try {
+      const prefixRows = await client.execute(`
+        SELECT DISTINCT TRIM(SUBSTR(topic, 1, INSTR(topic, ':') - 1)) AS name
+        FROM technical_knowledge
+        WHERE category = 'Project Context' AND topic LIKE '%: %' AND project_id IS NULL
+      `);
+      for (const row of prefixRows.rows) {
+        const name = String(row.name).trim();
+        if (!name) continue;
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO projects (id, name, root_path) VALUES (?, ?, NULL)`,
+          args: [crypto.randomUUID(), name],
+        });
+      }
+      await client.execute(`
+        UPDATE technical_knowledge SET project_id = (
+          SELECT p.id FROM projects p
+          WHERE p.name = TRIM(SUBSTR(technical_knowledge.topic, 1, INSTR(technical_knowledge.topic, ':') - 1))
+          LIMIT 1
+        )
+        WHERE category = 'Project Context' AND topic LIKE '%: %' AND project_id IS NULL
+      `);
+      console.error("[DB Migration] Backfilled proto-projects from topic prefixes.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Proto-project backfill failed: ${err.message}`);
+    }
+
     // Force replica sync to push DDL schema creations to primary cloud
     if (isEmbeddedReplica) {
       console.error("Pushing database schema changes to cloud primary...");
