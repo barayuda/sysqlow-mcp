@@ -6,6 +6,7 @@ import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { cosineSimilarity } from "./search";
+import { detectCurrentProject } from "./coherence";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -154,12 +155,24 @@ server.addTool({
     const topic = args.topic.trim();
     const content = args.content.trim();
     const category = normalizeCategory(args.category);
-    
+
+    // Resolve project scope: Project Context snippets are scoped to the current workspace,
+    // everything else stays generic unless the caller passes an explicit project_id.
+    let resolvedProjectId: string | null = null;
+    if (category === "Project Context") {
+      try {
+        const proj = await detectCurrentProject();
+        resolvedProjectId = proj.id;
+      } catch (err: any) {
+        console.error(`detectCurrentProject failed in store_knowledge: ${err.message}`);
+      }
+    }
+
     try {
       await client.execute({
-        sql: `INSERT INTO technical_knowledge (id, topic, content, category) 
-              VALUES (?, ?, ?, ?)`,
-        args: [id, topic, content, category],
+        sql: `INSERT INTO technical_knowledge (id, topic, content, category, project_id)
+              VALUES (?, ?, ?, ?, ?)`,
+        args: [id, topic, content, category, resolvedProjectId],
       });
       
       // Generate embedding in the background
