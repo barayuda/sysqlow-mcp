@@ -234,3 +234,60 @@ export async function reassignProject(snippetId: string, newProjectId: string | 
     )
   `);
 }
+
+export type StructuralReport = {
+  unprefixedProjectContext: { id: string; topic: string }[];
+  duplicateProtoProjects: { name: string; ids: string[] }[];
+  orphanRelations: number;
+};
+
+export async function auditStructural(autoApply: boolean): Promise<StructuralReport> {
+  // 1. Project Context rows that do NOT match the "Name: Topic" shape.
+  const unprefixed = await client.execute(`
+    SELECT id, topic FROM technical_knowledge
+    WHERE category = 'Project Context' AND topic NOT LIKE '%: %'
+  `);
+
+  // 2. Duplicate proto-projects (NULL root_path) with normalized-equal names.
+  const proto = await client.execute(`
+    SELECT id, LOWER(TRIM(name)) AS nkey, name FROM projects WHERE root_path IS NULL
+  `);
+  const byKey = new Map<string, { ids: string[]; name: string }>();
+  for (const r of proto.rows) {
+    const key = String(r.nkey);
+    const entry = byKey.get(key) ?? { ids: [], name: String(r.name) };
+    entry.ids.push(String(r.id));
+    byKey.set(key, entry);
+  }
+  const duplicateProtoProjects = [...byKey.entries()]
+    .filter(([, v]) => v.ids.length > 1)
+    .map(([, v]) => ({ name: v.name, ids: v.ids }));
+
+  // 3. Orphan relations (FK should cascade-delete, but double-check).
+  const orphans = await client.execute(`
+    SELECT COUNT(*) AS n FROM knowledge_relations kr
+    WHERE NOT EXISTS (SELECT 1 FROM technical_knowledge WHERE id = kr.source_id)
+       OR NOT EXISTS (SELECT 1 FROM technical_knowledge WHERE id = kr.target_id)
+  `);
+  const orphanRelations = Number(orphans.rows[0].n);
+
+  if (autoApply) {
+    // Auto-merge duplicate proto-projects (keep the first id).
+    for (const { ids } of duplicateProtoProjects) {
+      const [keep, ...drop] = ids;
+      for (const d of drop) await mergeProjects(keep, d);
+    }
+    // Delete orphan relations.
+    await client.execute(`
+      DELETE FROM knowledge_relations
+      WHERE NOT EXISTS (SELECT 1 FROM technical_knowledge WHERE id = knowledge_relations.source_id)
+         OR NOT EXISTS (SELECT 1 FROM technical_knowledge WHERE id = knowledge_relations.target_id)
+    `);
+  }
+
+  return {
+    unprefixedProjectContext: unprefixed.rows.map(r => ({ id: String(r.id), topic: String(r.topic) })),
+    duplicateProtoProjects,
+    orphanRelations,
+  };
+}
