@@ -147,6 +147,37 @@ export async function initDatabase() {
       console.error(`[DB Migration Warn] Failed to create embeddings table: ${err.message}`);
     }
 
+    // Auto-migration: create projects table on existing databases
+    try {
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS projects (
+          id             TEXT PRIMARY KEY,
+          name           TEXT NOT NULL,
+          root_path      TEXT UNIQUE,
+          detected_stack TEXT,
+          created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await client.execute(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_orphan
+          ON projects(name) WHERE root_path IS NULL
+      `);
+      console.error("[DB Migration] Verified projects table.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Failed to create projects table: ${err.message}`);
+    }
+
+    // Auto-migration: add project_id column to technical_knowledge if missing
+    try {
+      await client.execute(
+        "ALTER TABLE technical_knowledge ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL"
+      );
+      console.error("[DB Migration] Added project_id column to technical_knowledge.");
+    } catch (_) {
+      // Column already exists, ignore.
+    }
+
     // Force replica sync to push DDL schema creations to primary cloud
     if (isEmbeddedReplica) {
       console.error("Pushing database schema changes to cloud primary...");
