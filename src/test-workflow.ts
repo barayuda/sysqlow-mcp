@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { randomUUID } from "node:crypto";
 import { initDatabase, client } from "./db";
 
 type JsonRpcMessage = {
@@ -330,6 +331,37 @@ async function run() {
       throw new Error("Snippets were not successfully deleted from database");
     }
     console.log("✔ cleanup and sequential deletions successfully verified in database");
+
+    // --- Coherence engine assertions ---
+    console.log("[coherence] verifying isolation invariant…");
+
+    const projA = randomUUID();
+    const projB = randomUUID();
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, 'coh-a', '/tmp/coh-a-' || ?)", args: [projA, projA] });
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, 'coh-b', '/tmp/coh-b-' || ?)", args: [projB, projB] });
+    const sA = randomUUID();
+    const sB = randomUUID();
+    await client.execute({ sql: "INSERT INTO technical_knowledge (id, topic, content, category, project_id) VALUES (?, 'coh-A-topic', 'A-content', 'Project Context', ?)", args: [sA, projA] });
+    await client.execute({ sql: "INSERT INTO technical_knowledge (id, topic, content, category, project_id) VALUES (?, 'coh-B-topic', 'B-content', 'Project Context', ?)", args: [sB, projB] });
+
+    let triggerRejected = false;
+    try {
+      await client.execute({
+        sql: "INSERT INTO knowledge_relations (id, source_id, target_id, relation_type, weight) VALUES (?, ?, ?, 'manual', 1.0)",
+        args: [randomUUID(), sA, sB],
+      });
+    } catch (err: any) {
+      if (String(err.message).includes("context_isolation_violation")) triggerRejected = true;
+    }
+    if (!triggerRejected) {
+      console.error("[coherence] FAIL: cross-project relation was NOT rejected by trigger");
+      process.exit(1);
+    }
+    console.log("[coherence] OK: trigger rejected cross-project insert.");
+
+    // Cleanup (do this before server teardown so the live DB stays clean).
+    await client.execute({ sql: "DELETE FROM technical_knowledge WHERE id IN (?, ?)", args: [sA, sB] });
+    await client.execute({ sql: "DELETE FROM projects WHERE id IN (?, ?)", args: [projA, projB] });
 
     console.log("\n🎉 SUCCESS: knowledge_workflow integration test passed");
     process.exit(0);
