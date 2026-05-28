@@ -3,7 +3,6 @@
 > **Audience:** end users of sysqlow-mcp who want to store, recall, and curate engineering knowledge cleanly across multiple projects.
 >
 > **Companion docs:**
-> - [Design spec](superpowers/specs/2026-05-28-knowledge-coherence-engine-design.md) — architecture & invariants
 > - [LITERATURES.md](../LITERATURES.md) — academic grounding
 > - [CLAUDE.md](../CLAUDE.md) — operator/developer reference
 

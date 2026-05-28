@@ -13,7 +13,7 @@
 
 > 📚 **Theoretical Foundations:** SysQlow-MCP is a principled implementation of a **Personal Knowledge Graph (PKG)** with a built-in **Knowledge Graph Refinement** loop (Paulheim 2017) and context-stratified subgraphs (Serafini & Homola 2012). See [**LITERATURES.md**](LITERATURES.md) for the full academic grounding — Balog & Kenter's PKG agenda, Paulheim's refinement taxonomy, W3C PROV-O provenance, Vannevar Bush's Memex, Luhmann's Zettelkasten, and the modern temporal/contextual KG literature that informs every design decision in this codebase.
 
-> 🧭 **Coherence:** Snippets stored as `Project Context` are scoped to the workspace they were stored in; generic technical snippets are shared across all projects. The server self-audits on every startup. → **[Usage guide](docs/coherence-usage.md)** for day-to-day workflows · [Design spec](docs/superpowers/specs/2026-05-28-knowledge-coherence-engine-design.md) for architecture.
+> 🧭 **Coherence:** Snippets stored as `Project Context` are scoped to the workspace they were stored in; generic technical snippets are shared across all projects. The server self-audits on every startup. → **[Usage guide](docs/coherence-usage.md)** for day-to-day workflows.
 
 ---
 

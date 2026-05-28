@@ -475,7 +475,6 @@ If 0, you need an LLM key — embeddings only get written when one is configured
 | Doc | Why |
 |---|---|
 | **[docs/coherence-usage.md](./coherence-usage.md)** | Deep dive on the project scoping engine, with troubleshooting & the AI-agent cheat sheet |
-| **[docs/superpowers/specs/2026-05-28-knowledge-coherence-engine-design.md](./superpowers/specs/2026-05-28-knowledge-coherence-engine-design.md)** | Architecture spec — read this if you're extending the engine |
 | **[CLAUDE.md](../CLAUDE.md)** | Quick operator reference: commands, env vars, module map, key implementation patterns |
 | **[LITERATURES.md](../LITERATURES.md)** | The academic foundation — PKGs, MCS, PROV-O, Zettelkasten, Memex — for the design-curious |
 | **[README.md](../README.md)** | Feature reference + IDE setup snippets (Cursor/Antigravity/Claude Desktop) |

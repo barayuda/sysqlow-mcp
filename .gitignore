@@ -46,3 +46,7 @@ logs/
 *.ntvs*
 *.njsproj
 *.sln
+
+# Internal planning artifacts (specs/plans authored via the superpowers workflow).
+# These are useful locally but are not part of the public project documentation.
+docs/superpowers/
