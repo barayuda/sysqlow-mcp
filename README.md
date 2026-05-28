@@ -9,6 +9,8 @@
 
 **System Query Flow (SysQlow)** is an intelligent, self-validating local-first engineering knowledge base MCP server. It features microsecond Turso Embedded Replica sync, automatic codebase stack & convention learning, and a Gemini-powered Sentinel validation engine to audit snippets against live web documentation in real-time.
 
+> 🚀 **First time here? Start with the [Getting Started guide](docs/getting-started.md)** — covers prerequisites, a 5-minute quick start, MCP client setup (Cursor / Claude Desktop / Antigravity), and a first-snippet walkthrough.
+
 > 📚 **Theoretical Foundations:** SysQlow-MCP is a principled implementation of a **Personal Knowledge Graph (PKG)** with a built-in **Knowledge Graph Refinement** loop (Paulheim 2017) and context-stratified subgraphs (Serafini & Homola 2012). See [**LITERATURES.md**](LITERATURES.md) for the full academic grounding — Balog & Kenter's PKG agenda, Paulheim's refinement taxonomy, W3C PROV-O provenance, Vannevar Bush's Memex, Luhmann's Zettelkasten, and the modern temporal/contextual KG literature that informs every design decision in this codebase.
 
 > 🧭 **Coherence:** Snippets stored as `Project Context` are scoped to the workspace they were stored in; generic technical snippets are shared across all projects. The server self-audits on every startup. → **[Usage guide](docs/coherence-usage.md)** for day-to-day workflows · [Design spec](docs/superpowers/specs/2026-05-28-knowledge-coherence-engine-design.md) for architecture.
