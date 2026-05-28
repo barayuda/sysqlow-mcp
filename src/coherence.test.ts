@@ -108,3 +108,104 @@ describe("detectCurrentProject", () => {
     expect(project.name).toBe("nested-app");
   });
 });
+
+import { discoverRelations } from "./coherence";
+
+describe("discoverRelations", () => {
+  // Use unique project paths per test to scope cleanup tightly and avoid cross-test pollution
+  // (tests run against the live Turso DB; see existing detectCurrentProject tests for the pattern).
+  let testTag: string;
+
+  beforeEach(async () => {
+    await initDatabase();
+    testTag = `coh-discover-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }, 60000);
+
+  afterEach(async () => {
+    // Clean up: delete relations whose endpoints are our test snippets, snippets, then projects.
+    await client.execute({
+      sql: `DELETE FROM knowledge_relations WHERE source_id IN
+              (SELECT id FROM technical_knowledge WHERE topic LIKE ?)
+            OR target_id IN
+              (SELECT id FROM technical_knowledge WHERE topic LIKE ?)`,
+      args: [`${testTag}-%`, `${testTag}-%`],
+    });
+    await client.execute({
+      sql: "DELETE FROM technical_knowledge WHERE topic LIKE ?",
+      args: [`${testTag}-%`],
+    });
+    await client.execute({
+      sql: "DELETE FROM projects WHERE name LIKE ?",
+      args: [`${testTag}-%`],
+    });
+  }, 60000);
+
+  test("creates only within-project and generic↔project edges (no cross-project)", async () => {
+    const projA = crypto.randomUUID();
+    const projB = crypto.randomUUID();
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)", args: [projA, `${testTag}-A`, `/tmp/${testTag}-A`] });
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)", args: [projB, `${testTag}-B`, `/tmp/${testTag}-B`] });
+
+    const emb = JSON.stringify(Array(8).fill(1));
+    const seed = async (suffix: string, project_id: string | null) => {
+      const id = `${testTag}-${suffix}`;
+      await client.execute({
+        sql: "INSERT INTO technical_knowledge (id, topic, content, project_id) VALUES (?, ?, ?, ?)",
+        args: [id, `${testTag}-topic-${suffix}`, `c-${suffix}`, project_id],
+      });
+      await client.execute({
+        sql: "INSERT INTO technical_knowledge_embeddings (id, embedding) VALUES (?, ?)",
+        args: [id, emb],
+      });
+      return id;
+    };
+    const a1 = await seed("a1", projA);
+    const a2 = await seed("a2", projA);
+    const b1 = await seed("b1", projB);
+    const b2 = await seed("b2", projB);
+    const g  = await seed("g",  null);
+
+    await discoverRelations();
+
+    const edges = await client.execute({
+      sql: `SELECT source_id, target_id FROM knowledge_relations
+            WHERE source_id LIKE ? AND target_id LIKE ?`,
+      args: [`${testTag}-%`, `${testTag}-%`],
+    });
+    const pairs = edges.rows.map(r => `${r.source_id}->${r.target_id}`);
+
+    // No cross-project edges between A and B.
+    const crossAB = pairs.filter(p =>
+      (p.includes(a1) || p.includes(a2)) && (p.includes(b1) || p.includes(b2))
+    );
+    expect(crossAB.length).toBe(0);
+
+    // Within-project A edges exist.
+    expect(pairs.some(p => p === `${a1}->${a2}` || p === `${a2}->${a1}`)).toBe(true);
+    // Generic↔project edges exist (at least one).
+    expect(pairs.some(p => p.startsWith(`${g}->`) || p.endsWith(`->${g}`))).toBe(true);
+  }, 120000);
+
+  test("the DB trigger rejects a direct cross-project insert", async () => {
+    const projA = crypto.randomUUID();
+    const projB = crypto.randomUUID();
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)", args: [projA, `${testTag}-A`, `/tmp/${testTag}-A`] });
+    await client.execute({ sql: "INSERT INTO projects (id, name, root_path) VALUES (?, ?, ?)", args: [projB, `${testTag}-B`, `/tmp/${testTag}-B`] });
+    const x = `${testTag}-x`;
+    const y = `${testTag}-y`;
+    await client.execute({ sql: "INSERT INTO technical_knowledge (id, topic, content, project_id) VALUES (?, ?, ?, ?)", args: [x, `${testTag}-tx`, "cx", projA] });
+    await client.execute({ sql: "INSERT INTO technical_knowledge (id, topic, content, project_id) VALUES (?, ?, ?, ?)", args: [y, `${testTag}-ty`, "cy", projB] });
+
+    let threw = false;
+    try {
+      await client.execute({
+        sql: "INSERT INTO knowledge_relations (id, source_id, target_id, relation_type, weight) VALUES (?, ?, ?, 'manual', 1.0)",
+        args: [crypto.randomUUID(), x, y],
+      });
+    } catch (err: any) {
+      threw = true;
+      expect(String(err.message)).toContain("context_isolation_violation");
+    }
+    expect(threw).toBe(true);
+  }, 60000);
+});

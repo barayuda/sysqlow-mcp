@@ -120,3 +120,63 @@ export async function detectCurrentProject(): Promise<Project> {
   });
   return { id, name, root_path: rootPath, detected_stack: stack };
 }
+
+import { cosineSimilarity } from "./search";
+
+const DISCOVERY_THRESHOLD = 0.75;
+const DISCOVERY_TOPK = 10;
+
+export async function discoverRelations(opts?: { projectId?: string | null }): Promise<{ inserted: number; skipped: number }> {
+  const rows = await client.execute(`
+    SELECT tk.id AS id, tk.project_id AS project_id, e.embedding AS embedding
+    FROM technical_knowledge tk
+    JOIN technical_knowledge_embeddings e ON e.id = tk.id
+  `);
+
+  const records: { id: string; project_id: string | null; vec: number[] }[] = [];
+  for (const r of rows.rows) {
+    try {
+      const vec = JSON.parse(String(r.embedding)) as number[];
+      records.push({
+        id: String(r.id),
+        project_id: r.project_id === null ? null : String(r.project_id),
+        vec,
+      });
+    } catch { /* skip malformed embedding */ }
+  }
+
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const src of records) {
+    if (opts?.projectId !== undefined && opts.projectId !== null && src.project_id !== opts.projectId) continue;
+
+    const scored: { tgt: typeof src; score: number }[] = [];
+    for (const tgt of records) {
+      if (tgt.id === src.id) continue;
+      if (!canRelate(src.project_id, tgt.project_id)) { skipped++; continue; }
+      const score = cosineSimilarity(src.vec, tgt.vec);
+      if (score >= DISCOVERY_THRESHOLD) scored.push({ tgt, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+
+    for (const { tgt, score } of scored.slice(0, DISCOVERY_TOPK)) {
+      try {
+        await client.execute({
+          sql: `INSERT OR IGNORE INTO knowledge_relations (id, source_id, target_id, relation_type, weight)
+                VALUES (?, ?, ?, 'semantic_neighbor', ?)`,
+          args: [crypto.randomUUID(), src.id, tgt.id, score],
+        });
+        inserted++;
+      } catch (err: any) {
+        if (String(err.message).includes("context_isolation_violation")) {
+          skipped++;
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+
+  return { inserted, skipped };
+}

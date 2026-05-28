@@ -191,6 +191,13 @@ export async function initDatabase() {
           UNIQUE(source_id, target_id, relation_type)
         )
       `);
+      // Backward-compat: older deployments had this table without a weight column.
+      try {
+        await client.execute(`ALTER TABLE knowledge_relations ADD COLUMN weight REAL NOT NULL DEFAULT 1.0`);
+        console.error("[DB Migration] Added weight column to knowledge_relations.");
+      } catch (_) {
+        // Column already exists, ignore.
+      }
       await client.execute(`CREATE INDEX IF NOT EXISTS idx_relations_source ON knowledge_relations(source_id)`);
       await client.execute(`CREATE INDEX IF NOT EXISTS idx_relations_target ON knowledge_relations(target_id)`);
       await client.execute(`
