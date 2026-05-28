@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS technical_knowledge (
     confidence_score INTEGER DEFAULT 0, -- 1-10 rating
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+-- NOTE: column `project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`
+-- is added by auto-migration in src/db.ts so it lands on pre-existing databases too.
+-- New databases pick it up via the same migration on first init.
 
 -- Full Text Search virtual table for search fallback
 CREATE VIRTUAL TABLE IF NOT EXISTS technical_knowledge_fts USING fts5(
