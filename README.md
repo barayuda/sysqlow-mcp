@@ -312,9 +312,32 @@ To run the server in the background natively to access the **Interactive Web Gra
 3. Configure your IDE client to connect directly to the running SSE URL endpoint:
    ```json
    "sysqlow-mcp": {
-     "serverURL": "http://localhost:50741/sse"
-   }
+			"type": "sse",
+      "url": "http://localhost:50741/sse"
+    }
    ```
+   
+   with Antigravity IDE:
+    ```json
+    {
+      "mcpServers": {
+        "sysqlow-mcp": {
+          "$typeName": "exa.cascade_plugins_pb.CascadePluginCommandTemplate",
+          "command": "npx",
+          "args": [
+            "mcp-remote",
+            "http://localhost:50741/sse"
+          ],
+          "env": {
+            "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
+            "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
+            "GEMINI_API_KEY": "your-gemini-key",
+            "BRAVE_API_KEY": "your-brave-key"
+          }
+        },
+      }
+    }
+    ```
 
 ---
 
@@ -391,12 +414,28 @@ To integrate **System Query Flow** as a developer companion in your workspace:
 1. Ensure the Docker container is running in SSE mode: `./run-docker.sh --sse`.
 2. Open **Manage MCP servers** in Antigravity-IDE, click **"View raw config"**, and add:
    ```json
-   "sysqlow-mcp": {
-     "serverURL": "http://localhost:50741/sse"
-   }
+   {
+      "mcpServers": {
+        ..., // others mcp here, paste below like this
+        "sysqlow-mcp": {
+          "$typeName": "exa.cascade_plugins_pb.CascadePluginCommandTemplate",
+          "command": "npx",
+          "args": [
+            "mcp-remote",
+            "http://localhost:50741/sse"
+          ],
+          "env": {
+            "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
+            "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
+            "GEMINI_API_KEY": "your-gemini-key",
+            "BRAVE_API_KEY": "your-brave-key"
+          }
+        },
+      }
+    }
    ```
    > [!NOTE]
-   > The `"serverURL"` key is specific to **Antigravity-IDE**'s raw configuration format to register SSE network endpoints.
+   > The `"mcp-remote"` used specific to **Antigravity-IDE**'s raw configuration format to register SSE network endpoints.
 
 ### 2. Other IDEs (Cursor, Windsurf, Claude Desktop, etc.)
 * For Cursor, Claude Desktop, Windsurf, or other environments, the setup procedure varies depending on the platform's support for Stdio or SSE.
