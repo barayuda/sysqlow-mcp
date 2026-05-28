@@ -291,3 +291,141 @@ export async function auditStructural(autoApply: boolean): Promise<StructuralRep
     orphanRelations,
   };
 }
+
+export type Suggestion = {
+  id: string;
+  kind: "reassign_to_project" | "promote_to_generic" | "near_duplicate" | "mention_pollution";
+  snippet_id: string;
+  detail: string;
+  proposedProjectId?: string | null;
+  partnerSnippetId?: string;
+};
+
+const SIM_REASSIGN_THRESHOLD = 0.7;
+const SIM_NEAR_DUPLICATE = 0.92;
+
+export async function auditSemantic(): Promise<Suggestion[]> {
+  const rows = await client.execute(`
+    SELECT tk.id, tk.project_id, tk.topic, tk.content, e.embedding
+    FROM technical_knowledge tk
+    JOIN technical_knowledge_embeddings e ON e.id = tk.id
+  `);
+
+  type Rec = { id: string; project_id: string | null; topic: string; content: string; vec: number[] };
+  const recs: Rec[] = [];
+  for (const r of rows.rows) {
+    try {
+      recs.push({
+        id: String(r.id),
+        project_id: r.project_id === null ? null : String(r.project_id),
+        topic: String(r.topic),
+        content: String(r.content),
+        vec: JSON.parse(String(r.embedding)),
+      });
+    } catch { /* skip malformed */ }
+  }
+
+  const suggestions: Suggestion[] = [];
+
+  // Detector A: generic snippet whose top-3 neighbors all belong to one project.
+  for (const src of recs) {
+    if (src.project_id !== null) continue;
+    const others = recs
+      .filter(t => t.id !== src.id)
+      .map(t => ({ t, score: cosineSimilarity(src.vec, t.vec) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+    if (others.length === 3 && others.every(o => o.t.project_id !== null)) {
+      const projectIds = new Set(others.map(o => o.t.project_id));
+      const meanScore = others.reduce((s, o) => s + o.score, 0) / 3;
+      if (projectIds.size === 1 && meanScore > SIM_REASSIGN_THRESHOLD) {
+        suggestions.push({
+          id: crypto.randomUUID(),
+          kind: "reassign_to_project",
+          snippet_id: src.id,
+          proposedProjectId: [...projectIds][0],
+          detail: `Generic snippet "${src.topic}" looks project-specific (mean sim ${meanScore.toFixed(2)}).`,
+        });
+      }
+    }
+  }
+
+  // Detector B: project snippet whose neighbors span ≥3 distinct projects.
+  for (const src of recs) {
+    if (src.project_id === null) continue;
+    const others = recs
+      .filter(t => t.id !== src.id && t.project_id !== null)
+      .map(t => ({ t, score: cosineSimilarity(src.vec, t.vec) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5);
+    const projectIds = new Set(others.map(o => o.t.project_id));
+    if (projectIds.size >= 3) {
+      suggestions.push({
+        id: crypto.randomUUID(),
+        kind: "promote_to_generic",
+        snippet_id: src.id,
+        proposedProjectId: null,
+        detail: `Project snippet "${src.topic}" has neighbors across ${projectIds.size} projects — likely generic.`,
+      });
+    }
+  }
+
+  // Detector C: cross-project near-duplicates.
+  for (let i = 0; i < recs.length; i++) {
+    for (let j = i + 1; j < recs.length; j++) {
+      const a = recs[i], b = recs[j];
+      if (a.project_id === null || b.project_id === null) continue;
+      if (a.project_id === b.project_id) continue;
+      const score = cosineSimilarity(a.vec, b.vec);
+      if (score >= SIM_NEAR_DUPLICATE) {
+        suggestions.push({
+          id: crypto.randomUUID(),
+          kind: "near_duplicate",
+          snippet_id: a.id,
+          partnerSnippetId: b.id,
+          detail: `Near-duplicate across projects: "${a.topic}" ≈ "${b.topic}" (sim ${score.toFixed(2)}).`,
+        });
+      }
+    }
+  }
+
+  // Detector D: Project Context rows mentioning another known project's name.
+  const projNames = await client.execute("SELECT id, name FROM projects");
+  const nameById = new Map<string, string>(projNames.rows.map(r => [String(r.id), String(r.name)]));
+  for (const src of recs) {
+    if (src.project_id === null) continue;
+    for (const [otherId, otherName] of nameById) {
+      if (otherId === src.project_id) continue;
+      if (otherName.length < 3) continue;
+      if (src.content.toLowerCase().includes(otherName.toLowerCase())) {
+        suggestions.push({
+          id: crypto.randomUUID(),
+          kind: "mention_pollution",
+          snippet_id: src.id,
+          detail: `Snippet in project ${nameById.get(src.project_id) ?? src.project_id} mentions "${otherName}".`,
+        });
+      }
+    }
+  }
+
+  return suggestions;
+}
+
+export async function applySuggestions(all: Suggestion[], ids: string[]): Promise<{ applied: number; failed: string[] }> {
+  const picked = all.filter(s => ids.includes(s.id));
+  let applied = 0;
+  const failed: string[] = [];
+  for (const s of picked) {
+    try {
+      if (s.kind === "reassign_to_project" || s.kind === "promote_to_generic") {
+        await reassignProject(s.snippet_id, s.proposedProjectId ?? null);
+        applied++;
+      } else {
+        failed.push(`${s.id}: ${s.kind} requires manual action`);
+      }
+    } catch (err: any) {
+      failed.push(`${s.id}: ${err.message}`);
+    }
+  }
+  return { applied, failed };
+}
