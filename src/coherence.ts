@@ -39,7 +39,12 @@ export function _setCwdForTests(p: string) { cwdOverride = p; }
 export function _resetCwdForTests() { cwdOverride = null; }
 
 function getCwd(): string {
-  return cwdOverride ?? process.cwd();
+  // Precedence: test override > SYSQLOW_WORKSPACE_DIR env (used by run-docker.sh
+  // to pass the host's invocation cwd into the container) > process.cwd().
+  if (cwdOverride !== null) return cwdOverride;
+  const envDir = process.env.SYSQLOW_WORKSPACE_DIR;
+  if (envDir && envDir.trim().length > 0) return envDir;
+  return process.cwd();
 }
 
 function findProjectRoot(startDir: string): string {

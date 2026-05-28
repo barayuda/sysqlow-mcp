@@ -44,6 +44,13 @@ if [ "$1" == "--sse" ] || [ "$1" == "-s" ]; then
   MCP_TRANSPORT="sse"
 fi
 
+# Capture the host's invocation cwd BEFORE we `cd` into the project directory,
+# so the coherence engine inside the container can detect which workspace the
+# MCP client (Cursor, Claude Desktop, Antigravity, etc.) was launched from.
+# Without this, every Project Context snippet would be tagged with sysqlow-mcp's
+# own /app directory instead of the user's actual workspace.
+HOST_WORKSPACE_DIR="$PWD"
+
 cd "$PROJECT_DIR"
 
 # Save stdout to FD 3, and redirect stdout to stderr for the setup and build phases.
@@ -141,4 +148,5 @@ docker run $DETACHED_FLAG \
   -e BRAVE_API_KEY="$BRAVE_API_KEY" \
   -e MCP_TRANSPORT="$MCP_TRANSPORT" \
   -e PORT="$PORT" \
+  -e SYSQLOW_WORKSPACE_DIR="$HOST_WORKSPACE_DIR" \
   sysqlow-mcp
