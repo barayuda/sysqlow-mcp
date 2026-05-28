@@ -1489,16 +1489,17 @@ app.get("/", async (c) => {
 app.get("/api/graph", async (c) => {
   try {
     const res = await client.execute({
-      sql: `SELECT id, topic, content, category, parent_id, is_validated, confidence_score, last_validated_at, source_url 
+      sql: `SELECT id, topic, content, category, parent_id, project_id, is_validated, confidence_score, last_validated_at, source_url
             FROM technical_knowledge`,
       args: []
     });
-    
+
     const nodes = res.rows.map((r: any) => ({
       id: r.id,
       label: r.topic,
       category: r.category || "None",
       parent_id: r.parent_id || null,
+      project_id: r.project_id === null || r.project_id === undefined ? null : String(r.project_id),
       validated: r.is_validated,
       confidence: r.confidence_score,
       last_validated: r.last_validated_at,
@@ -1506,61 +1507,22 @@ app.get("/api/graph", async (c) => {
       content: r.content
     }));
 
-    const edges: any[] = [];
-    
-    // Build edges dynamically
-    for (let i = 0; i < nodes.length; i++) {
-      const nodeA = nodes[i];
-      
-      for (let j = i + 1; j < nodes.length; j++) {
-        const nodeB = nodes[j];
-        
-        // Connect nodes sharing the same category
-        if (nodeA.category && nodeA.category !== "None" && nodeA.category === nodeB.category) {
-          // If the category is "Project Context", only connect them if they belong to the same project
-          // (i.e. they share the same prefix before the colon in their topic label, like "sysqlow-mcp:")
-          if (nodeA.category === "Project Context") {
-            const prefixA = nodeA.label.split(":")[0]?.trim().toLowerCase();
-            const prefixB = nodeB.label.split(":")[0]?.trim().toLowerCase();
-            if (prefixA && prefixB && prefixA === prefixB) {
-              edges.push({
-                from: nodeA.id,
-                to: nodeB.id,
-                label: "Same Category",
-                arrows: undefined
-              });
-            }
-          } else {
-            edges.push({
-              from: nodeA.id,
-              to: nodeB.id,
-              label: "Same Category",
-              arrows: undefined
-            });
-          }
-        }
-      }
-      
-      // Directed reference connection if snippet content mentions another topic
-      for (let j = 0; j < nodes.length; j++) {
-        const nodeB = nodes[j];
-        if (nodeA.id === nodeB.id) continue;
-        
-        // Escape special chars in regex
-        const escapedLabel = nodeB.label.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-        const topicRegex = new RegExp(escapedLabel, 'i');
-        if (topicRegex.test(nodeA.content)) {
-          edges.push({
-            from: nodeA.id,
-            to: nodeB.id,
-            label: "Mentions",
-            arrows: "to"
-          });
-        }
-      }
-    }
+    // Edges now come from the materialized knowledge_relations table.
+    // The isolation trigger guarantees no cross-project edges exist here.
+    const edgeRows = await client.execute(`
+      SELECT source_id, target_id, weight, relation_type
+      FROM knowledge_relations
+    `);
 
-    // Add Parent-Child hierarchy edges
+    const edges: any[] = edgeRows.rows.map((r: any) => ({
+      from: String(r.source_id),
+      to: String(r.target_id),
+      value: Number(r.weight),
+      label: String(r.relation_type),
+      title: String(r.relation_type),
+    }));
+
+    // Add Parent-Child hierarchy edges (still derived directly from technical_knowledge)
     for (let i = 0; i < nodes.length; i++) {
       const node = nodes[i];
       if (node.parent_id) {
