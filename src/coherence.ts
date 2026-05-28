@@ -429,3 +429,14 @@ export async function applySuggestions(all: Suggestion[], ids: string[]): Promis
   }
   return { applied, failed };
 }
+
+// In-memory suggestion store, keyed by audit run id. Cleared on server restart by design —
+// suggestions are advisory and re-running the audit is cheap.
+const suggestionStore = new Map<string, Suggestion[]>();
+
+export function _stashSuggestions(runId: string, list: Suggestion[]) {
+  suggestionStore.set(runId, list);
+}
+export function _loadSuggestions(runId: string): Suggestion[] | undefined {
+  return suggestionStore.get(runId);
+}

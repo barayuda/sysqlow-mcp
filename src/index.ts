@@ -6,7 +6,7 @@ import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { cosineSimilarity } from "./search";
-import { detectCurrentProject, mergeProjects, reassignProject } from "./coherence";
+import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, _stashSuggestions, _loadSuggestions } from "./coherence";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -887,6 +887,41 @@ server.addTool({
     return new_project_id === null
       ? `Promoted snippet ${snippet_id} to generic.`
       : `Reassigned snippet ${snippet_id} to project ${new_project_id}.`;
+  },
+});
+
+server.addTool({
+  name: "audit_coherence",
+  description: "Inspect and optionally clean the knowledge base. Phase 1 = structural (auto-applies safe fixes). Phase 2 = semantic (returns suggestions; apply a subset with apply_suggestions). Phase 3 = relation re-discovery.",
+  parameters: z.object({
+    phase: z.enum(["1", "2", "3", "all"]).default("all"),
+    auto_apply_structural: z.boolean().default(true),
+    apply_suggestions: z.array(z.string()).optional().describe("Suggestion ids returned by a previous phase-2 call."),
+    suggestion_run_id: z.string().optional().describe("Run id from a previous phase-2 call, required when applying."),
+  }),
+  execute: async ({ phase, auto_apply_structural, apply_suggestions, suggestion_run_id }) => {
+    const out: Record<string, unknown> = {};
+
+    if (apply_suggestions && apply_suggestions.length > 0) {
+      if (!suggestion_run_id) throw new Error("suggestion_run_id is required when apply_suggestions is set");
+      const stash = _loadSuggestions(suggestion_run_id);
+      if (!stash) throw new Error(`No suggestions found for run ${suggestion_run_id}. Re-run phase 2 first.`);
+      out.applied = await applySuggestions(stash, apply_suggestions);
+    }
+
+    if (phase === "1" || phase === "all") {
+      out.phase1 = await auditStructural(auto_apply_structural);
+    }
+    if (phase === "2" || phase === "all") {
+      const suggestions = await auditSemantic();
+      const runId = crypto.randomUUID();
+      _stashSuggestions(runId, suggestions);
+      out.phase2 = { run_id: runId, suggestions };
+    }
+    if (phase === "3" || phase === "all") {
+      out.phase3 = await discoverRelations();
+    }
+    return JSON.stringify(out, null, 2);
   },
 });
 
