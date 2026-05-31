@@ -394,37 +394,63 @@ server.addTool({
 
       let validationStatus: string | null = null;
       let validationConfidence: number | null = null;
+      let validationDeferred = false;
       if (revalidateBeforeCommit) {
-        const validationReport = await validateKnowledgeItem(id);
-        validationStatus = validationReport.status;
-        validationConfidence = validationReport.confidence_score;
+        try {
+          const validationReport = await validateKnowledgeItem(id, "interactive");
+          validationStatus = validationReport.status;
+          validationConfidence = validationReport.confidence_score;
+        } catch (err: any) {
+          if (err?.name === "QuotaExhaustedError") {
+            console.error(`[commit_update] Gemini quota exhausted; committing content for "${id}" with validation deferred.`);
+            validationDeferred = true;
+          } else {
+            throw err;
+          }
+        }
       }
-      
-      // 2. Perform the update and mark validated
-      await client.execute({
-        sql: `UPDATE technical_knowledge 
-              SET content = ?, 
-                  is_validated = 1, 
-                  last_validated_at = CURRENT_TIMESTAMP 
-              WHERE id = ?`,
-        args: [content, id],
-      });
-      
+
+      // 2. Perform the update. The user's content is always persisted; validation
+      //    outcome only decides whether we mark it validated or leave it for the daemon.
+      if (validationDeferred) {
+        // Validation was skipped because the LLM quota was exhausted. Commit the
+        // content but leave is_validated = 0 and DON'T bump last_validated_at, so the
+        // Sentinel daemon reclaims this snippet at its next cycle once quota resets.
+        await client.execute({
+          sql: `UPDATE technical_knowledge
+                SET content = ?, is_validated = 0
+                WHERE id = ?`,
+          args: [content, id],
+        });
+      } else {
+        await client.execute({
+          sql: `UPDATE technical_knowledge
+                SET content = ?,
+                    is_validated = 1,
+                    last_validated_at = CURRENT_TIMESTAMP
+                WHERE id = ?`,
+          args: [content, id],
+        });
+      }
+
       // Regenerate embedding in the background
       storeEmbeddingForSnippet(id, topic, content).catch(() => {});
-      
+
       // Sync replica with Turso in the background
       if (isEmbeddedReplica) {
         client.sync().catch((err: any) => console.error(`Replication sync error in commit: ${err.message}`));
       }
-      
+
       return JSON.stringify({
         status: "success",
-        message: `Snippet "${topic}" has been successfully updated and marked as validated.`,
+        message: validationDeferred
+          ? `Content committed for snippet "${topic}". Gemini daily quota is exhausted; the snippet will be auto-validated by the Sentinel daemon once quota resets (midnight Pacific).`
+          : `Snippet "${topic}" has been successfully updated and marked as validated.`,
         id,
         revalidated_before_commit: revalidateBeforeCommit,
         validation_status: validationStatus,
-        validation_confidence_score: validationConfidence
+        validation_confidence_score: validationConfidence,
+        ...(validationDeferred ? { validation_deferred: true } : {}),
       }, null, 2);
     } catch (error: any) {
       console.error(`Error in commit_update for ID "${id}": ${error.message}`);
@@ -1686,9 +1712,12 @@ app.get("/api/graph", async (c) => {
 app.post("/api/validate/:id", async (c) => {
   const id = c.req.param("id");
   try {
-    const report = await validateKnowledgeItem(id);
+    const report = await validateKnowledgeItem(id, "interactive");
     return c.json({ status: "success", report });
   } catch (err: any) {
+    if (err?.name === "QuotaExhaustedError") {
+      return c.json({ status: "deferred", message: "Gemini daily quota exhausted; validation will be retried by the Sentinel daemon after reset (midnight Pacific).", id }, 202);
+    }
     return c.json({ status: "error", message: err.message }, 500);
   }
 });
