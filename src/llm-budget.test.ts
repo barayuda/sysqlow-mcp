@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { createClient, type Client } from "@libsql/client";
-import { ensureBudgetSchema, pacificDate, canSpend, record, markExhausted, parseRetryInfo } from "./llm-budget";
+import { ensureBudgetSchema, pacificDate, canSpend, record, markExhausted, parseRetryInfo, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
 
 async function freshDb(): Promise<Client> {
   const db = createClient({ url: ":memory:" });
@@ -123,5 +123,36 @@ describe("parseRetryInfo", () => {
   });
   test("missing details defaults to daily (safe: stop trying)", () => {
     expect(parseRetryInfo({ error: { code: 429 } })).toEqual({ kind: "daily", retryDelayMs: null });
+  });
+});
+
+describe("getBudgetSnapshot / setBudgetConfig", () => {
+  const NOW = new Date("2026-05-29T20:00:00Z");
+  test("snapshot reports per-model count/limit/remaining", async () => {
+    const db = await freshDb();
+    await record("gemini-2.5-flash", NOW, db);
+    await record("gemini-2.5-flash", NOW, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    const flash = snap.find((s) => s.model === "gemini-2.5-flash")!;
+    expect(flash.count).toBe(2);
+    expect(flash.limit).toBe(20);
+    expect(flash.remaining).toBe(18);
+    expect(flash.daemonReserve).toBe(8);
+    expect(flash.exhausted).toBe(false);
+  });
+  test("setBudgetConfig updates an existing key and rejects unknown keys", async () => {
+    const db = await freshDb();
+    await setBudgetConfig("flash_daily_limit", 30, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    expect(snap.find((s) => s.model === "gemini-2.5-flash")!.limit).toBe(30);
+    await expect(setBudgetConfig("bogus_key", 1, db)).rejects.toThrow();
+    await expect(setBudgetConfig("flash_daily_limit", -1, db)).rejects.toThrow();
+  });
+
+  test("snapshot reflects markExhausted", async () => {
+    const db = await freshDb();
+    await markExhausted("gemini-2.5-flash", NOW, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    expect(snap.find((s) => s.model === "gemini-2.5-flash")!.exhausted).toBe(true);
   });
 });

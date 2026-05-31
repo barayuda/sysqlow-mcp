@@ -5,7 +5,7 @@ import { validateKnowledgeItem } from "./sentinel";
 import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
-import { QuotaExhaustedError } from "./llm-budget";
+import { QuotaExhaustedError, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
 import { cosineSimilarity } from "./search";
 import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, runBackgroundCoherence, _stashSuggestions, _loadSuggestions } from "./coherence";
 
@@ -904,6 +904,29 @@ server.addTool({
 });
 
 server.addTool({
+  name: "get_llm_budget",
+  description: "Report today's Gemini quota usage per model: count, daily limit, remaining, daemon reserve, and exhaustion status. Quota resets at midnight Pacific.",
+  parameters: z.object({}),
+  execute: async () => {
+    const snap = await getBudgetSnapshot();
+    return JSON.stringify(snap, null, 2);
+  },
+});
+
+server.addTool({
+  name: "set_llm_budget",
+  description: "Update an LLM budget cap at runtime (persisted in llm_budget_config). Keys: flash_daily_limit, flash_daemon_reserve, embed_daily_limit, embed_catchup_per_pass.",
+  parameters: z.object({
+    key: z.enum(["flash_daily_limit", "flash_daemon_reserve", "embed_daily_limit", "embed_catchup_per_pass"]),
+    value: z.number().int().min(0),
+  }),
+  execute: async ({ key, value }) => {
+    await setBudgetConfig(key, value);
+    return `Updated ${key} = ${value}.`;
+  },
+});
+
+server.addTool({
   name: "audit_coherence",
   description: "Inspect and optionally clean the knowledge base. Phase 1 = structural (auto-applies safe fixes). Phase 2 = semantic (returns suggestions; apply a subset with apply_suggestions). Phase 3 = relation re-discovery.",
   parameters: z.object({
@@ -1690,6 +1713,16 @@ app.get("/api/env", async (c) => {
     }
   }
   return c.json({ env: redactedEnv });
+});
+
+// LLM budget status for the dashboard badge
+app.get("/api/budget", async (c) => {
+  try {
+    const snapshot = await getBudgetSnapshot();
+    return c.json({ budget: snapshot });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
 });
 
 // Start the server using the configured transport mode

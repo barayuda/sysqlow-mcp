@@ -146,6 +146,60 @@ export function parseRetryInfo(body: any): { kind: "rpm" | "daily"; retryDelayMs
   return { kind, retryDelayMs };
 }
 
+export interface BudgetStatus {
+  model: GeminiModel;
+  count: number;
+  limit: number;
+  daemonReserve: number;
+  remaining: number;
+  exhausted: boolean;
+  resetsAt: string;
+}
+
+export async function getBudgetSnapshot(
+  now: Date = new Date(),
+  db: Client = defaultClient,
+): Promise<BudgetStatus[]> {
+  const models: GeminiModel[] = ["gemini-2.5-flash", "gemini-embedding-001"];
+  const out: BudgetStatus[] = [];
+  for (const model of models) {
+    const { count, exhausted } = await readRow(model, now, db);
+    const limit = await getConfig(limitKey(model), db);
+    const daemonReserve =
+      model === "gemini-2.5-flash" ? await getConfig("flash_daemon_reserve", db) : 0;
+    out.push({
+      model,
+      count,
+      limit,
+      daemonReserve,
+      remaining: Math.max(0, limit - count),
+      exhausted,
+      resetsAt: "midnight America/Los_Angeles",
+    });
+  }
+  return out;
+}
+
+export async function setBudgetConfig(
+  key: string,
+  value: number,
+  db: Client = defaultClient,
+): Promise<void> {
+  if (!(key in DEFAULT_CONFIG)) {
+    throw new Error(
+      `Unknown budget config key "${key}". Valid keys: ${Object.keys(DEFAULT_CONFIG).join(", ")}`,
+    );
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Budget config value must be a non-negative integer, got ${value}.`);
+  }
+  await db.execute({
+    sql: `INSERT INTO llm_budget_config (key, value) VALUES (?, ?)
+          ON CONFLICT(key) DO UPDATE SET value = ?`,
+    args: [key, value, value],
+  });
+}
+
 const PACIFIC_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
