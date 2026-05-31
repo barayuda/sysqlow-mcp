@@ -489,9 +489,15 @@ export async function processMissingEmbeddings(): Promise<{ embedded: number; st
     });
     if (row.rows.length === 0) continue;
     const text = `${row.rows[0].topic}\n${row.rows[0].content}`;
-    const vector = await generateEmbedding(text, "daemon"); // null on QuotaExhaustedError
+    const vector = await generateEmbedding(text, "daemon");
     if (!vector || vector.length === 0) {
-      return { embedded, stoppedEarly: true };
+      // generateEmbedding returns null on *any* failure (quota, network blip,
+      // malformed response). Only abort the whole pass when budget is actually
+      // exhausted — otherwise skip this row and keep going.
+      if (!(await canSpend("gemini-embedding-001", "daemon"))) {
+        return { embedded, stoppedEarly: true };
+      }
+      continue;
     }
     await client.execute({
       sql: `INSERT OR REPLACE INTO technical_knowledge_embeddings (id, embedding) VALUES (?, ?)`,
