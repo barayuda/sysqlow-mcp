@@ -154,15 +154,24 @@ async function runGeminiJSONGeneric<T>(
   if (res.status === 429) {
     const body = await res.json().catch(() => ({}));
     const { kind, retryDelayMs } = parseRetryInfo(body);
-    if (kind === "rpm" && retryDelayMs !== null) {
-      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${retryDelayMs}ms then retrying once.`);
-      await new Promise((r) => setTimeout(r, retryDelayMs));
-      res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
-    } else {
+    if (kind === "daily") {
       console.error(`[SysQlow LLM] Daily quota exhausted for ${model}; marking exhausted until Pacific midnight.`);
       await markExhausted(model);
       throw new QuotaExhaustedError(model, retryDelayMs);
+    }
+    // kind === "rpm": short-lived throttle. Sleep the server-suggested delay
+    // (capped) and retry once. If we still get 429, throw without persisting
+    // — the *next* 429 from a genuine daily breach will carry an explicit
+    // QuotaFailure violation tag and snap the model shut properly.
+    if (retryDelayMs !== null) {
+      const sleepMs = Math.min(retryDelayMs, 60_000);
+      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
+      await new Promise((r) => setTimeout(r, sleepMs));
+      res = await fetchWithRetry(url, requestInit);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+    } else {
+      console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
+      throw new QuotaExhaustedError(model, null);
     }
   }
 
@@ -286,15 +295,24 @@ async function embedGemini(text: string, apiKey: string, caller: Caller = "inter
   if (res.status === 429) {
     const body = await res.json().catch(() => ({}));
     const { kind, retryDelayMs } = parseRetryInfo(body);
-    if (kind === "rpm" && retryDelayMs !== null) {
-      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${retryDelayMs}ms then retrying once.`);
-      await new Promise((r) => setTimeout(r, retryDelayMs));
-      res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
-    } else {
+    if (kind === "daily") {
       console.error(`[SysQlow LLM] Daily quota exhausted for ${model}; marking exhausted until Pacific midnight.`);
       await markExhausted(model);
       throw new QuotaExhaustedError(model, retryDelayMs);
+    }
+    // kind === "rpm": short-lived throttle. Sleep the server-suggested delay
+    // (capped) and retry once. If we still get 429, throw without persisting
+    // — the *next* 429 from a genuine daily breach will carry an explicit
+    // QuotaFailure violation tag and snap the model shut properly.
+    if (retryDelayMs !== null) {
+      const sleepMs = Math.min(retryDelayMs, 60_000);
+      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
+      await new Promise((r) => setTimeout(r, sleepMs));
+      res = await fetchWithRetry(url, requestInit);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+    } else {
+      console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
+      throw new QuotaExhaustedError(model, null);
     }
   }
 

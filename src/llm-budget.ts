@@ -142,10 +142,15 @@ export function parseRetryInfo(body: any): { kind: "rpm" | "daily"; retryDelayMs
     }
   }
 
-  // A 429 we can't positively identify as per-minute is treated as daily so we
-  // stop hammering a cap that won't clear until midnight.
-  const kind: "rpm" | "daily" =
-    isDaily ? "daily" : retryDelayMs !== null && retryDelayMs < 60_000 ? "rpm" : "daily";
+  // Only persist a full-day exhaustion when Gemini *explicitly* tags the
+  // violation as per-day. Everything else — RetryInfo-only responses, missing
+  // details, even multi-minute retry delays from burst limits — classifies as
+  // rpm. If we get it wrong, the next 429 will carry the QuotaFailure tag
+  // (Gemini is consistent about including it once the daily cap actually
+  // breaches) and snap the model shut properly. The cost of that one extra
+  // request is much smaller than nuking the model until midnight on a
+  // short-lived burst limit.
+  const kind: "rpm" | "daily" = isDaily ? "daily" : "rpm";
   return { kind, retryDelayMs };
 }
 

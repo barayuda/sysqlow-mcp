@@ -121,8 +121,20 @@ describe("parseRetryInfo", () => {
   test("classifies per-day cap as daily regardless of short retryDelay", () => {
     expect(parseRetryInfo(dailyBody)).toEqual({ kind: "daily", retryDelayMs: 53000 });
   });
-  test("missing details defaults to daily (safe: stop trying)", () => {
-    expect(parseRetryInfo({ error: { code: 429 } })).toEqual({ kind: "daily", retryDelayMs: null });
+  test("missing QuotaFailure tag defaults to rpm (never persist exhaustion on ambiguous 429)", () => {
+    expect(parseRetryInfo({ error: { code: 429 } })).toEqual({ kind: "rpm", retryDelayMs: null });
+  });
+  test("RetryInfo-only with multi-minute delay classifies as rpm (not daily)", () => {
+    // Real-world burst limits can hand back 90s+ RetryInfo without any
+    // QuotaFailure violation tag. Previously these were misclassified as
+    // daily and persisted markExhausted; now they stay rpm.
+    const body = {
+      error: {
+        code: 429,
+        details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "90s" }],
+      },
+    };
+    expect(parseRetryInfo(body)).toEqual({ kind: "rpm", retryDelayMs: 90000 });
   });
 });
 
