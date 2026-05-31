@@ -10,13 +10,10 @@ export interface ValidationReport {
 
 export async function generateEmbedding(text: string, caller: Caller = "interactive"): Promise<number[] | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
-  const openAIKey = process.env.OPENAI_API_KEY;
 
   try {
     if (geminiKey) {
       return await embedGemini(text, geminiKey, caller);
-    } else if (openAIKey) {
-      return await embedOpenAI(text, openAIKey);
     }
   } catch (error) {
     console.error("Embedding generation failed:", error);
@@ -54,8 +51,7 @@ export async function validateContentWithLLM(
   caller: Caller = "interactive"
 ): Promise<ValidationReport> {
   const geminiKey = process.env.GEMINI_API_KEY;
-  const openAIKey = process.env.OPENAI_API_KEY;
-  
+
   const prompt = `You are a strict, self-validating engineering documentation expert.
 Analyze the following technical snippet and verify its accuracy and modern-day relevance against the provided live search results and documentation snippets.
 
@@ -88,11 +84,9 @@ IMPORTANT: Since you are returning a JSON object, all backslashes (\\) in string
 
   if (geminiKey) {
     return await runGeminiJSONGeneric<ValidationReport>(prompt, geminiKey, caller);
-  } else if (openAIKey) {
-    return await runOpenAIJSONGeneric<ValidationReport>(prompt, openAIKey);
   }
-  
-  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
+
+  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
 }
 
 async function fetchWithRetry(
@@ -192,40 +186,6 @@ async function runGeminiJSONGeneric<T>(
   }
 }
 
-async function runOpenAIJSONGeneric<T>(prompt: string, apiKey: string): Promise<T> {
-  const url = "https://api.openai.com/v1/chat/completions";
-  
-  const res = await fetchWithRetry(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      response_format: { type: "json_object" }
-    })
-  });
-  
-  if (!res.ok) {
-    throw new Error(`OpenAI Chat completion failed with status ${res.status}: ${await res.text()}`);
-  }
-  
-  const data = await res.json() as any;
-  const jsonText = data.choices?.[0]?.message?.content;
-  if (!jsonText) {
-    throw new Error("No response content from OpenAI");
-  }
-  
-  const repairedJson = cleanLLMJson(jsonText);
-  try {
-    return JSON.parse(repairedJson) as T;
-  } catch (e: any) {
-    console.error("Failed to parse repaired JSON. Raw text:\n", jsonText);
-    throw new Error(`JSON Parse error: ${e.message}`);
-  }
-}
 export interface ImportedDocumentation {
   topic: string;
   content: string;
@@ -237,7 +197,6 @@ export async function extractDocumentationWithLLM(
   caller: Caller = "interactive"
 ): Promise<ImportedDocumentation> {
   const geminiKey = process.env.GEMINI_API_KEY;
-  const openAIKey = process.env.OPENAI_API_KEY;
 
   const prompt = `You are a world-class documentation ingestion bot.
 Analyze the following raw documentation stream crawled from the URL "${url}".
@@ -257,11 +216,9 @@ IMPORTANT: All backslashes (\\\\) in string values (such as paths, namespaces, o
 
   if (geminiKey) {
     return await runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey, caller);
-  } else if (openAIKey) {
-    return await runOpenAIJSONGeneric<ImportedDocumentation>(prompt, openAIKey);
   }
 
-  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
+  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
 }
 
 export interface LearnedKnowledgeItem {
@@ -276,8 +233,7 @@ export async function analyzeCodebaseWithLLM(
   caller: Caller = "interactive"
 ): Promise<LearnedKnowledgeItem[]> {
   const geminiKey = process.env.GEMINI_API_KEY;
-  const openAIKey = process.env.OPENAI_API_KEY;
-  
+
   const prompt = `You are a world-class software engineering architect.
 Analyze the following core configuration and metadata files collected from the root of the project "${projectName}".
 Your task is to identify and extract the project's exact technology stack, key dependencies, architectural decisions, and custom code conventions/rules.
@@ -308,11 +264,9 @@ IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces)
 
   if (geminiKey) {
     return await runGeminiJSONGeneric<LearnedKnowledgeItem[]>(prompt, geminiKey, caller);
-  } else if (openAIKey) {
-    return await runOpenAIJSONGeneric<LearnedKnowledgeItem[]>(prompt, openAIKey);
   }
-  
-  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
+
+  throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
 }
 
 async function embedGemini(text: string, apiKey: string, caller: Caller = "interactive"): Promise<number[]> {
@@ -350,27 +304,4 @@ async function embedGemini(text: string, apiKey: string, caller: Caller = "inter
   await record(model);
   const data = (await res.json()) as any;
   return data.embedding?.values || [];
-}
-
-async function embedOpenAI(text: string, apiKey: string): Promise<number[]> {
-  const url = "https://api.openai.com/v1/embeddings";
-  
-  const res = await fetchWithRetry(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: text
-    })
-  });
-  
-  if (!res.ok) {
-    throw new Error(`OpenAI embeddings failed: ${await res.text()}`);
-  }
-  
-  const data = await res.json() as any;
-  return data.data?.[0]?.embedding || [];
 }
