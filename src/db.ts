@@ -218,6 +218,15 @@ export async function initDatabase() {
       console.error(`[DB Migration Warn] Failed to create relations table: ${err.message}`);
     }
 
+    // Auto-migration: LLM budget guard tables (quota log + tunable config).
+    try {
+      const { ensureBudgetSchema } = await import("./llm-budget");
+      await ensureBudgetSchema(client);
+      console.error("[DB Migration] Verified llm_quota_log and llm_budget_config tables.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Failed to create budget tables: ${err.message}`);
+    }
+
     // One-time backfill: turn legacy "Project Context" rows into proto-projects so that
     // existing data starts cohering before any new write happens.
     try {

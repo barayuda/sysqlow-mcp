@@ -2,7 +2,10 @@ import { client } from "./db";
 import { webSearch } from "./search";
 import { validateContentWithLLM, ValidationReport } from "./llm";
 
-export async function validateKnowledgeItem(id: string): Promise<ValidationReport> {
+export async function validateKnowledgeItem(
+  id: string,
+  caller: "interactive" | "daemon" = "interactive",
+): Promise<ValidationReport> {
   // 1. Fetch item from DB
   const res = await client.execute({
     sql: "SELECT * FROM technical_knowledge WHERE id = ?",
@@ -35,7 +38,7 @@ export async function validateKnowledgeItem(id: string): Promise<ValidationRepor
   
   // 4. Validate with LLM
   console.error(`Prompting LLM to validate content for topic: "${topic}"...`);
-  const report = await validateContentWithLLM(topic, content, searchContext);
+  const report = await validateContentWithLLM(topic, content, searchContext, caller);
   
   // 5. Update validation metadata in DB
   // We set is_validated to true only if the LLM states it is completely "up_to_date".
