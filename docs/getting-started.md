@@ -15,7 +15,7 @@
 5. [Choosing your transport mode](#5-choosing-your-transport-mode)
 6. [Connecting your MCP client](#6-connecting-your-mcp-client)
 7. [Your first snippet (end-to-end walkthrough)](#7-your-first-snippet-end-to-end-walkthrough)
-8. [The 11 MCP tools — when to use which](#8-the-11-mcp-tools--when-to-use-which)
+8. [The 13 MCP tools — when to use which](#8-the-13-mcp-tools--when-to-use-which)
 9. [The Coherence Engine (project scoping)](#9-the-coherence-engine-project-scoping)
 10. [The dashboard (SSE mode)](#10-the-dashboard-sse-mode)
 11. [Background daemons (Sentinel + Coherence)](#11-background-daemons-sentinel--coherence)
@@ -31,7 +31,7 @@
 
 - **Stores technical snippets** (code, configs, commands, architecture notes) in SQLite — either standalone or as a [Turso](https://turso.tech) embedded replica synced to the cloud.
 - **Auto-detects which project** you're in and scopes project-specific notes to that workspace (the [Coherence Engine](./coherence-usage.md)).
-- **Validates snippets** against live web docs using Google Gemini (or OpenAI) + Brave Search (or DuckDuckGo) — the **Sentinel** daemon.
+- **Validates snippets** against live web docs using Google Gemini + Brave Search (or DuckDuckGo) — the **Sentinel** daemon.
 - **Visualizes** the knowledge graph in a browser dashboard.
 - **Learns your codebase** by scanning manifests (`package.json`, `composer.json`, `go.mod`, etc.) and storing architectural summaries.
 
@@ -52,8 +52,7 @@ You can have both at once (different clients connecting to whichever fits).
 ### Optional (but recommended)
 
 - **[Turso](https://turso.tech)** account — for cloud-synced cross-device snippets. Free tier is sufficient. Skip this to run purely local (a plain SQLite file).
-- **[Google AI Studio](https://aistudio.google.com)** API key — unlocks the Sentinel validator, semantic search embeddings, and `import_documentation` LLM extraction.
-- **[OpenAI](https://platform.openai.com)** API key — fallback if Gemini isn't set.
+- **[Google AI Studio](https://aistudio.google.com)** API key — unlocks the Sentinel validator, semantic search embeddings, and `import_documentation` LLM extraction. Gemini is the only supported LLM provider (see [ADR-0001](../docs/adr/0001-gemini-only-remove-openai-fallback.md)).
 - **[Brave Search](https://brave.com/search/api/)** API key — better web search results for Sentinel. Optional; DuckDuckGo HTML scraper is the keyless fallback.
 - **Docker** — only if you prefer containerized deployment.
 
@@ -63,7 +62,7 @@ You can have both at once (different clients connecting to whichever fits).
 |---|---|
 | Just Bun | Local SQLite, store/recall via FTS5 + LIKE, no validator, no embeddings |
 | + Turso URL & token | Multi-device sync via embedded replica |
-| + GEMINI_API_KEY (or OPENAI_API_KEY) | Sentinel validator + semantic search + `import_documentation` LLM extraction |
+| + GEMINI_API_KEY | Sentinel validator + semantic search + `import_documentation` LLM extraction |
 | + BRAVE_API_KEY | Higher-quality web search for Sentinel (vs. DuckDuckGo HTML scraping) |
 
 ## 3. 5-minute quick start (zero-config local)
@@ -110,9 +109,8 @@ All configuration is via environment variables. Create a `.env` file in the repo
 TURSO_DATABASE_URL="libsql://your-db-name.turso.io"
 TURSO_AUTH_TOKEN="eyJhbGc..."
 
-# LLM provider — Gemini is primary, OpenAI is fallback
+# LLM provider — Gemini only (ADR-0001)
 GEMINI_API_KEY="AIzaSy..."
-OPENAI_API_KEY="sk-..."
 
 # Web search for Sentinel validator (optional, DDG is the keyless fallback)
 BRAVE_API_KEY="..."
@@ -133,16 +131,18 @@ Full reference: see [CLAUDE.md](../CLAUDE.md#environment-variables).
 |---|---|
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Sign up at [turso.tech](https://turso.tech), `turso db create sysqlow`, `turso db show sysqlow --url`, `turso db tokens create sysqlow` |
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) → Get API key → Create |
-| `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) → Create new secret key |
 | `BRAVE_API_KEY` | [api.search.brave.com](https://api.search.brave.com) → free tier 2K queries/month |
 
-### What the LLM keys are used for
+### What the LLM key is used for
 
 - **Gemini** (`gemini-2.5-flash`): Sentinel validation reasoning, codebase analysis, documentation extraction.
 - **Gemini embeddings** (`gemini-embedding-001`): semantic search vectors. Stored as JSON in `technical_knowledge_embeddings`.
-- **OpenAI fallback**: same workloads if Gemini is absent (`gpt-4o-mini`, `text-embedding-3-small`).
 
 No LLM key → store/recall still work, just no validation/embeddings.
+
+### LLM budget caps (no env vars)
+
+The free Gemini tier caps generation at ~20 requests/day and embeddings at ~100/day. To keep background daemons from burning the daily quota the user needs for interactive work, daily caps and the daemon's reserve slice live in the `llm_budget_config` table (auto-seeded on first start), not in environment variables. Inspect or retune them at runtime with the `get_llm_budget` / `set_llm_budget` MCP tools, or the `/api/budget` REST endpoint in SSE mode. See [ADR-0001](../docs/adr/0001-gemini-only-remove-openai-fallback.md) for the rationale.
 
 ## 5. Choosing your transport mode
 
@@ -201,7 +201,7 @@ Open your Cursor settings file (`Cmd+Shift+P → "Cursor Settings"` → MCP), an
 }
 ```
 
-Restart Cursor. The MCP indicator should show `sysqlow-mcp` connected. In the chat panel, type *"What MCP tools do I have?"* — you should see all 14 tools listed (including the new `audit_coherence`, `merge_projects`, `reassign_project`).
+Restart Cursor. The MCP indicator should show `sysqlow-mcp` connected. In the chat panel, type *"What MCP tools do I have?"* — you should see all 13 tools listed (including the coherence tools `audit_coherence` / `merge_projects` / `reassign_project` and the budget tools `get_llm_budget` / `set_llm_budget`).
 
 ### 6b. Claude Desktop
 
@@ -278,7 +278,7 @@ The agent calls `commit_update`. By default it re-runs validation, then writes t
 
 If you watch the dashboard during this, the node's color shifts from amber (pending) to emerald (validated).
 
-## 8. The 11 MCP tools — when to use which
+## 8. The 13 MCP tools — when to use which
 
 | Tool | Trigger phrases | What it does |
 |---|---|---|
@@ -293,6 +293,8 @@ If you watch the dashboard during this, the node's color shifts from amber (pend
 | `audit_coherence` *(new)* | "audit the databank", "run coherence checks" | Three-phase audit: structural / semantic / relation re-discovery |
 | `merge_projects` *(new)* | "merge project A into B" | Reassigns all snippets, deletes drop project |
 | `reassign_project` *(new)* | "move snippet X to project Y", "promote to generic" | Single-snippet correction with auto edge pruning |
+| `get_llm_budget` *(new)* | "show my Gemini quota", "how much budget left today" | Reports today's per-model usage, daemon reserve, remaining calls, exhausted flag, and Pacific-midnight reset time |
+| `set_llm_budget` *(new)* | "raise the flash daily limit to 30", "set embed catch-up to 5" | Updates `flash_daily_limit` / `flash_daemon_reserve` / `embed_daily_limit` / `embed_catchup_per_pass` at runtime — takes effect on the next call |
 
 ### Pattern: knowledge_workflow as the easy entry point
 
@@ -325,6 +327,7 @@ Start the server in SSE mode and open `http://localhost:50741/` in your browser.
 - **Click any node** → side panel with content, validation status, suggested diffs, manual "Trigger Sentinel Audit" button.
 - **Real-time log terminal** at the bottom — see `[Sentinel Daemon]` and `[Coherence Daemon]` activity live.
 - **Environment viewer** — confirms which env vars the server sees (secrets masked).
+- **LLM budget badge** — header chip showing today's `flash X/Y · embed X/Y` usage, with `⛔` when a model is exhausted until next Pacific midnight. Polls `/api/budget` every 60 s.
 
 Node colors:
 
@@ -344,8 +347,8 @@ Two daemons run in the background. Both log to stderr (visible in the dashboard'
 ### Sentinel — knowledge freshness
 
 - **When**: SSE mode only. Boot + every 12 hours.
-- **What**: Picks 3 oldest unvalidated-or-stale snippets, runs `validate_knowledge` on each. Sleeps 3 seconds between LLM calls to avoid rate limits.
-- **Output**: `[Sentinel Daemon] Auditing snippet: "…"` lines.
+- **What**: Picks the oldest unvalidated-or-stale snippets and runs `validate_knowledge` on each. Calls flow through the LLM budget guard with `caller="daemon"`, so the Sentinel stops below `flash_daily_limit − flash_daemon_reserve` (defaults: 20 − 8 = 12 calls/day) — leaving the reserve for interactive use. If Gemini returns a per-minute 429, the guard sleeps exactly the response's `retryDelay` and retries once; a per-day 429 snaps the model exhausted until next Pacific midnight.
+- **Output**: `[Sentinel Daemon] Auditing snippet: "…"` lines, plus `QuotaExhaustedError` logs when the daemon stops early.
 
 ### Coherence — graph integrity
 
@@ -448,9 +451,15 @@ bun install
 
 | Cause | Fix |
 |---|---|
-| No `GEMINI_API_KEY` / `OPENAI_API_KEY` | Set one; validator can't reason without an LLM |
-| Rate limit hit | Wait 1 minute (Gemini free tier: ~15 RPM) |
+| No `GEMINI_API_KEY` | Set it; validator can't reason without an LLM |
+| Rate limit hit | Wait 1 minute (Gemini free tier: ~15 RPM); the budget guard already sleeps the exact `retryDelay` and retries once |
 | Brave API exhausted | DDG fallback kicks in automatically; results may be lower quality |
+
+### `validate_knowledge` returns `{"status":"deferred"}`
+
+The daily Gemini quota for `gemini-2.5-flash` is exhausted (or the daemon is at its reserve floor for daemon-caller paths). The snippet stays at `is_validated=0` and the Sentinel cron will pick it up after the next Pacific-midnight reset. Inspect the situation with `get_llm_budget`, or temporarily raise the cap with `set_llm_budget` if you're on a paid tier:
+
+> *"Set flash_daily_limit to 50."*
 
 ### Project Context snippets all land in one phantom project
 
@@ -489,10 +498,8 @@ TURSO_DATABASE_URL="libsql://sysqlow-mcp-yourname.aws-ap-northeast-1.turso.io"
 TURSO_AUTH_TOKEN="eyJhbGciOiJFZERTQSI..."
 LOCAL_DB_PATH="data/sysqlow.db"
 
-# LLM
+# LLM (Gemini-only per ADR-0001)
 GEMINI_API_KEY="AIzaSy..."
-# OpenAI as fallback; either alone is enough
-# OPENAI_API_KEY="sk-..."
 
 # Web search (Brave is higher quality; DDG fallback is keyless)
 BRAVE_API_KEY="BSA..."
