@@ -64,7 +64,10 @@ async function ceilingFor(model: GeminiModel, caller: Caller, db: Client): Promi
   const limit = await getConfig(limitKey(model), db);
   if (caller === "interactive") return limit;
   if (model === "gemini-2.5-flash") {
-    return limit - (await getConfig("flash_daemon_reserve", db));
+    // Defense in depth: clamp at 0 in case a pre-existing config row has the
+    // reserve ≥ limit. setBudgetConfig rejects this combination going forward,
+    // but historical rows or direct DB writes could still produce it.
+    return Math.max(0, limit - (await getConfig("flash_daemon_reserve", db)));
   }
   return limit;
 }
@@ -151,6 +154,8 @@ export interface BudgetStatus {
   count: number;
   limit: number;
   daemonReserve: number;
+  daemonCeiling: number;
+  daemonExhausted: boolean;
   remaining: number;
   exhausted: boolean;
   resetsAt: string;
@@ -167,11 +172,15 @@ export async function getBudgetSnapshot(
     const limit = await getConfig(limitKey(model), db);
     const daemonReserve =
       model === "gemini-2.5-flash" ? await getConfig("flash_daemon_reserve", db) : 0;
+    const daemonCeiling =
+      model === "gemini-2.5-flash" ? Math.max(0, limit - daemonReserve) : limit;
     out.push({
       model,
       count,
       limit,
       daemonReserve,
+      daemonCeiling,
+      daemonExhausted: count >= daemonCeiling,
       remaining: Math.max(0, limit - count),
       exhausted,
       resetsAt: "midnight America/Los_Angeles",
@@ -192,6 +201,25 @@ export async function setBudgetConfig(
   }
   if (!Number.isInteger(value) || value < 0) {
     throw new Error(`Budget config value must be a non-negative integer, got ${value}.`);
+  }
+  // Reject combinations that would wedge the daemon at ceiling=0 forever.
+  // Without this guard, every daemon canSpend() silently returns false and no
+  // operator-visible error ever fires.
+  if (key === "flash_daemon_reserve") {
+    const limit = await getConfig("flash_daily_limit", db);
+    if (value >= limit) {
+      throw new Error(
+        `flash_daemon_reserve (${value}) must be strictly less than flash_daily_limit (${limit}); otherwise the daemon ceiling collapses to 0.`,
+      );
+    }
+  }
+  if (key === "flash_daily_limit") {
+    const reserve = await getConfig("flash_daemon_reserve", db);
+    if (value <= reserve) {
+      throw new Error(
+        `flash_daily_limit (${value}) must be strictly greater than flash_daemon_reserve (${reserve}); otherwise the daemon ceiling collapses to 0.`,
+      );
+    }
   }
   await db.execute({
     sql: `INSERT INTO llm_budget_config (key, value) VALUES (?, ?)

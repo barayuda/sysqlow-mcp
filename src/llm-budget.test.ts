@@ -149,6 +149,28 @@ describe("getBudgetSnapshot / setBudgetConfig", () => {
     await expect(setBudgetConfig("flash_daily_limit", -1, db)).rejects.toThrow();
   });
 
+  test("setBudgetConfig rejects reserve >= limit and limit <= reserve", async () => {
+    const db = await freshDb();
+    // defaults: flash_daily_limit=20, flash_daemon_reserve=8
+    await expect(setBudgetConfig("flash_daemon_reserve", 20, db)).rejects.toThrow(/strictly less/);
+    await expect(setBudgetConfig("flash_daemon_reserve", 25, db)).rejects.toThrow(/strictly less/);
+    await expect(setBudgetConfig("flash_daily_limit", 8, db)).rejects.toThrow(/strictly greater/);
+    await expect(setBudgetConfig("flash_daily_limit", 5, db)).rejects.toThrow(/strictly greater/);
+    // valid edge: reserve = limit - 1 is allowed
+    await setBudgetConfig("flash_daemon_reserve", 19, db);
+  });
+
+  test("snapshot reports daemonCeiling and daemonExhausted", async () => {
+    const db = await freshDb();
+    // defaults: limit 20, reserve 8 → daemon ceiling 12
+    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", NOW, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    const flash = snap.find((s) => s.model === "gemini-2.5-flash")!;
+    expect(flash.daemonCeiling).toBe(12);
+    expect(flash.daemonExhausted).toBe(true);
+    expect(flash.exhausted).toBe(false); // interactive still has 8 left
+  });
+
   test("snapshot reflects markExhausted", async () => {
     const db = await freshDb();
     await markExhausted("gemini-2.5-flash", NOW, db);
