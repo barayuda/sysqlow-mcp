@@ -1,3 +1,5 @@
+import { canSpend, record, markExhausted, parseRetryInfo, QuotaExhaustedError, type Caller } from "./llm-budget";
+
 export interface ValidationReport {
   status: "up_to_date" | "outdated" | "incorrect";
   reasoning: string;
@@ -6,13 +8,13 @@ export interface ValidationReport {
   confidence_score: number;
 }
 
-export async function generateEmbedding(text: string): Promise<number[] | null> {
+export async function generateEmbedding(text: string, caller: Caller = "interactive"): Promise<number[] | null> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openAIKey = process.env.OPENAI_API_KEY;
-  
+
   try {
     if (geminiKey) {
-      return await embedGemini(text, geminiKey);
+      return await embedGemini(text, geminiKey, caller);
     } else if (openAIKey) {
       return await embedOpenAI(text, openAIKey);
     }
@@ -48,7 +50,8 @@ function cleanLLMJson(text: string): string {
 export async function validateContentWithLLM(
   topic: string,
   content: string,
-  searchResults: string
+  searchResults: string,
+  caller: Caller = "interactive"
 ): Promise<ValidationReport> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openAIKey = process.env.OPENAI_API_KEY;
@@ -84,7 +87,7 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: Since you are returning a JSON object, all backslashes (\\) in string values (such as PHP namespaces or file paths) MUST be properly double-escaped as (\\\\) to ensure the JSON is valid. Do not wrap in markdown or backticks.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<ValidationReport>(prompt, geminiKey);
+    return await runGeminiJSONGeneric<ValidationReport>(prompt, geminiKey, caller);
   } else if (openAIKey) {
     return await runOpenAIJSONGeneric<ValidationReport>(prompt, openAIKey);
   }
@@ -106,7 +109,7 @@ async function fetchWithRetry(
         return res;
       }
       
-      const isTransient = [429, 500, 502, 503, 504].includes(res.status);
+      const isTransient = [500, 502, 503, 504].includes(res.status);
       if (isTransient && retries < maxRetries) {
         retries++;
         const delay = initialDelay * Math.pow(2, retries - 1);
@@ -133,31 +136,53 @@ async function fetchWithRetry(
   }
 }
 
-async function runGeminiJSONGeneric<T>(prompt: string, apiKey: string): Promise<T> {
+async function runGeminiJSONGeneric<T>(
+  prompt: string,
+  apiKey: string,
+  caller: Caller = "interactive",
+): Promise<T> {
   const model = "gemini-2.5-flash";
+  if (!(await canSpend(model, caller))) {
+    throw new QuotaExhaustedError(model, null);
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  
-  const res = await fetchWithRetry(url, {
+  const requestInit: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: "application/json"
-      }
-    })
-  });
-  
+      generationConfig: { responseMimeType: "application/json" },
+    }),
+  };
+
+  let res = await fetchWithRetry(url, requestInit);
+
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    const { kind, retryDelayMs } = parseRetryInfo(body);
+    if (kind === "rpm" && retryDelayMs !== null) {
+      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${retryDelayMs}ms then retrying once.`);
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+      res = await fetchWithRetry(url, requestInit);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+    } else {
+      console.error(`[SysQlow LLM] Daily quota exhausted for ${model}; marking exhausted until Pacific midnight.`);
+      await markExhausted(model);
+      throw new QuotaExhaustedError(model, retryDelayMs);
+    }
+  }
+
   if (!res.ok) {
     throw new Error(`Gemini generateContent failed with status ${res.status}: ${await res.text()}`);
   }
-  
-  const data = await res.json() as any;
+
+  await record(model);
+
+  const data = (await res.json()) as any;
   const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!jsonText) {
     throw new Error("No response content from Gemini");
   }
-  
   const repairedJson = cleanLLMJson(jsonText);
   try {
     return JSON.parse(repairedJson) as T;
@@ -208,7 +233,8 @@ export interface ImportedDocumentation {
 
 export async function extractDocumentationWithLLM(
   url: string,
-  rawContent: string
+  rawContent: string,
+  caller: Caller = "interactive"
 ): Promise<ImportedDocumentation> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openAIKey = process.env.OPENAI_API_KEY;
@@ -230,7 +256,7 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: All backslashes (\\\\) in string values (such as paths, namespaces, or escapes in code blocks) MUST be double-escaped to ensure the JSON is valid.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey);
+    return await runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey, caller);
   } else if (openAIKey) {
     return await runOpenAIJSONGeneric<ImportedDocumentation>(prompt, openAIKey);
   }
@@ -246,7 +272,8 @@ export interface LearnedKnowledgeItem {
 
 export async function analyzeCodebaseWithLLM(
   projectName: string,
-  collectedFiles: string
+  collectedFiles: string,
+  caller: Caller = "interactive"
 ): Promise<LearnedKnowledgeItem[]> {
   const geminiKey = process.env.GEMINI_API_KEY;
   const openAIKey = process.env.OPENAI_API_KEY;
@@ -280,7 +307,7 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces) MUST be double-escaped to ensure the JSON is valid.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<LearnedKnowledgeItem[]>(prompt, geminiKey);
+    return await runGeminiJSONGeneric<LearnedKnowledgeItem[]>(prompt, geminiKey, caller);
   } else if (openAIKey) {
     return await runOpenAIJSONGeneric<LearnedKnowledgeItem[]>(prompt, openAIKey);
   }
@@ -288,23 +315,40 @@ IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces)
   throw new Error("No LLM API key configured. Please set GEMINI_API_KEY or OPENAI_API_KEY.");
 }
 
-async function embedGemini(text: string, apiKey: string): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
-  
-  const res = await fetchWithRetry(url, {
+async function embedGemini(text: string, apiKey: string, caller: Caller = "interactive"): Promise<number[]> {
+  const model = "gemini-embedding-001";
+  if (!(await canSpend(model, caller))) {
+    throw new QuotaExhaustedError(model, null);
+  }
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:embedContent?key=${apiKey}`;
+  const requestInit: RequestInit = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "models/gemini-embedding-001",
-      content: { parts: [{ text }] }
-    })
-  });
-  
+    body: JSON.stringify({ model: `models/${model}`, content: { parts: [{ text }] } }),
+  };
+
+  let res = await fetchWithRetry(url, requestInit);
+
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    const { kind, retryDelayMs } = parseRetryInfo(body);
+    if (kind === "rpm" && retryDelayMs !== null) {
+      console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${retryDelayMs}ms then retrying once.`);
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+      res = await fetchWithRetry(url, requestInit);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+    } else {
+      console.error(`[SysQlow LLM] Daily quota exhausted for ${model}; marking exhausted until Pacific midnight.`);
+      await markExhausted(model);
+      throw new QuotaExhaustedError(model, retryDelayMs);
+    }
+  }
+
   if (!res.ok) {
     throw new Error(`Gemini embedContent failed: ${await res.text()}`);
   }
-  
-  const data = await res.json() as any;
+  await record(model);
+  const data = (await res.json()) as any;
   return data.embedding?.values || [];
 }
 
