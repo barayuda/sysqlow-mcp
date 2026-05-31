@@ -16,7 +16,10 @@ export function canRelate(
 
 import fs from "node:fs";
 import path from "node:path";
+import type { Client } from "@libsql/client";
 import { client } from "./db";
+import { generateEmbedding } from "./llm";
+import { canSpend } from "./llm-budget";
 
 export type Project = {
   id: string;
@@ -455,6 +458,50 @@ export function _loadSuggestions(runId: string): Suggestion[] | undefined {
  * plus the isolation trigger, and any error is swallowed so the caller (server
  * startup or Sentinel cron) never gets killed by an audit failure.
  */
+export async function selectMissingEmbeddingIds(limit: number, db: Client = client): Promise<string[]> {
+  const res = await db.execute({
+    sql: `SELECT k.id FROM technical_knowledge k
+          LEFT JOIN technical_knowledge_embeddings e ON e.id = k.id
+          WHERE e.id IS NULL
+          ORDER BY k.created_at ASC
+          LIMIT ?`,
+    args: [limit],
+  });
+  return res.rows.map((r) => String(r.id));
+}
+
+export async function processMissingEmbeddings(): Promise<{ embedded: number; stoppedEarly: boolean }> {
+  const capRes = await client.execute({
+    sql: `SELECT value FROM llm_budget_config WHERE key = 'embed_catchup_per_pass'`,
+    args: [],
+  });
+  const cap = capRes.rows.length ? Number(capRes.rows[0].value) : 10;
+
+  const ids = await selectMissingEmbeddingIds(cap);
+  let embedded = 0;
+  for (const id of ids) {
+    if (!(await canSpend("gemini-embedding-001", "daemon"))) {
+      return { embedded, stoppedEarly: true };
+    }
+    const row = await client.execute({
+      sql: `SELECT topic, content FROM technical_knowledge WHERE id = ?`,
+      args: [id],
+    });
+    if (row.rows.length === 0) continue;
+    const text = `${row.rows[0].topic}\n${row.rows[0].content}`;
+    const vector = await generateEmbedding(text, "daemon"); // null on QuotaExhaustedError
+    if (!vector || vector.length === 0) {
+      return { embedded, stoppedEarly: true };
+    }
+    await client.execute({
+      sql: `INSERT OR REPLACE INTO technical_knowledge_embeddings (id, embedding) VALUES (?, ?)`,
+      args: [id, JSON.stringify(vector)],
+    });
+    embedded++;
+  }
+  return { embedded, stoppedEarly: false };
+}
+
 export async function runBackgroundCoherence(label: string): Promise<void> {
   try {
     console.error(`[Coherence Daemon] (${label}) Phase 1 (structural)…`);
@@ -464,6 +511,13 @@ export async function runBackgroundCoherence(label: string): Promise<void> {
       `unprefixed=${p1.unprefixedProjectContext.length}, ` +
       `merged_proto_dupes=${p1.duplicateProtoProjects.length}, ` +
       `orphan_relations=${p1.orphanRelations}`,
+    );
+
+    console.error(`[Coherence Daemon] (${label}) Embedding catch-up…`);
+    const emb = await processMissingEmbeddings();
+    console.error(
+      `[Coherence Daemon] (${label}) Embedding catch-up done: ` +
+      `embedded=${emb.embedded}, stopped_early=${emb.stoppedEarly}`,
     );
 
     console.error(`[Coherence Daemon] (${label}) Phase 3 (re-discovery)…`);

@@ -5,6 +5,7 @@ import { validateKnowledgeItem } from "./sentinel";
 import { learnCodebase } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
+import { QuotaExhaustedError, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
 import { cosineSimilarity } from "./search";
 import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, runBackgroundCoherence, _stashSuggestions, _loadSuggestions } from "./coherence";
 
@@ -335,8 +336,20 @@ server.addTool({
     const id = args.id.trim();
     
     try {
-      const report = await validateKnowledgeItem(id);
-      
+      let report;
+      try {
+        report = await validateKnowledgeItem(id, "interactive");
+      } catch (err: any) {
+        if (err?.name === "QuotaExhaustedError") {
+          return JSON.stringify({
+            status: "deferred",
+            message: "Gemini daily quota is exhausted. The snippet is stored/unchanged and will be auto-validated by the Sentinel daemon once quota resets (midnight Pacific).",
+            id,
+          }, null, 2);
+        }
+        throw err;
+      }
+
       return JSON.stringify({
         id,
         status: report.status,
@@ -381,37 +394,63 @@ server.addTool({
 
       let validationStatus: string | null = null;
       let validationConfidence: number | null = null;
+      let validationDeferred = false;
       if (revalidateBeforeCommit) {
-        const validationReport = await validateKnowledgeItem(id);
-        validationStatus = validationReport.status;
-        validationConfidence = validationReport.confidence_score;
+        try {
+          const validationReport = await validateKnowledgeItem(id, "interactive");
+          validationStatus = validationReport.status;
+          validationConfidence = validationReport.confidence_score;
+        } catch (err: any) {
+          if (err?.name === "QuotaExhaustedError") {
+            console.error(`[commit_update] Gemini quota exhausted; committing content for "${id}" with validation deferred.`);
+            validationDeferred = true;
+          } else {
+            throw err;
+          }
+        }
       }
-      
-      // 2. Perform the update and mark validated
-      await client.execute({
-        sql: `UPDATE technical_knowledge 
-              SET content = ?, 
-                  is_validated = 1, 
-                  last_validated_at = CURRENT_TIMESTAMP 
-              WHERE id = ?`,
-        args: [content, id],
-      });
-      
+
+      // 2. Perform the update. The user's content is always persisted; validation
+      //    outcome only decides whether we mark it validated or leave it for the daemon.
+      if (validationDeferred) {
+        // Validation was skipped because the LLM quota was exhausted. Commit the
+        // content but leave is_validated = 0 and DON'T bump last_validated_at, so the
+        // Sentinel daemon reclaims this snippet at its next cycle once quota resets.
+        await client.execute({
+          sql: `UPDATE technical_knowledge
+                SET content = ?, is_validated = 0
+                WHERE id = ?`,
+          args: [content, id],
+        });
+      } else {
+        await client.execute({
+          sql: `UPDATE technical_knowledge
+                SET content = ?,
+                    is_validated = 1,
+                    last_validated_at = CURRENT_TIMESTAMP
+                WHERE id = ?`,
+          args: [content, id],
+        });
+      }
+
       // Regenerate embedding in the background
       storeEmbeddingForSnippet(id, topic, content).catch(() => {});
-      
+
       // Sync replica with Turso in the background
       if (isEmbeddedReplica) {
         client.sync().catch((err: any) => console.error(`Replication sync error in commit: ${err.message}`));
       }
-      
+
       return JSON.stringify({
         status: "success",
-        message: `Snippet "${topic}" has been successfully updated and marked as validated.`,
+        message: validationDeferred
+          ? `Content committed for snippet "${topic}". Gemini daily quota is exhausted; the snippet will be auto-validated by the Sentinel daemon once quota resets (midnight Pacific).`
+          : `Snippet "${topic}" has been successfully updated and marked as validated.`,
         id,
         revalidated_before_commit: revalidateBeforeCommit,
         validation_status: validationStatus,
-        validation_confidence_score: validationConfidence
+        validation_confidence_score: validationConfidence,
+        ...(validationDeferred ? { validation_deferred: true } : {}),
       }, null, 2);
     } catch (error: any) {
       console.error(`Error in commit_update for ID "${id}": ${error.message}`);
@@ -891,6 +930,29 @@ server.addTool({
 });
 
 server.addTool({
+  name: "get_llm_budget",
+  description: "Report today's Gemini quota usage per model: count, daily limit, remaining, daemon reserve, and exhaustion status. Quota resets at midnight Pacific.",
+  parameters: z.object({}),
+  execute: async () => {
+    const snap = await getBudgetSnapshot();
+    return JSON.stringify(snap, null, 2);
+  },
+});
+
+server.addTool({
+  name: "set_llm_budget",
+  description: "Update an LLM budget cap at runtime (persisted in llm_budget_config). Keys: flash_daily_limit, flash_daemon_reserve, embed_daily_limit, embed_catchup_per_pass.",
+  parameters: z.object({
+    key: z.enum(["flash_daily_limit", "flash_daemon_reserve", "embed_daily_limit", "embed_catchup_per_pass"]),
+    value: z.number().int().min(0),
+  }),
+  execute: async ({ key, value }) => {
+    await setBudgetConfig(key, value);
+    return `Updated ${key} = ${value}.`;
+  },
+});
+
+server.addTool({
   name: "audit_coherence",
   description: "Inspect and optionally clean the knowledge base. Phase 1 = structural (auto-applies safe fixes). Phase 2 = semantic (returns suggestions; apply a subset with apply_suggestions). Phase 3 = relation re-discovery.",
   parameters: z.object({
@@ -1065,7 +1127,20 @@ server.addTool({
             message: "For intent=validate, id is required."
           }, null, 2);
         }
-        const report = await validateKnowledgeItem(id);
+        let report;
+        try {
+          report = await validateKnowledgeItem(id, "interactive");
+        } catch (err: any) {
+          if (err?.name === "QuotaExhaustedError") {
+            return JSON.stringify({
+              status: "deferred",
+              intent,
+              id,
+              message: "Gemini daily quota is exhausted. The snippet is stored/unchanged and will be auto-validated by the Sentinel daemon once quota resets (midnight Pacific).",
+            }, null, 2);
+          }
+          throw err;
+        }
         return JSON.stringify({
           status: "success",
           intent,
@@ -1099,18 +1174,41 @@ server.addTool({
 
         let validationStatus: string | null = null;
         let validationConfidence: number | null = null;
+        let validationDeferred = false;
         if (revalidateBeforeCommit) {
-          const validationReport = await validateKnowledgeItem(id);
-          validationStatus = validationReport.status;
-          validationConfidence = validationReport.confidence_score;
+          try {
+            const validationReport = await validateKnowledgeItem(id, "interactive");
+            validationStatus = validationReport.status;
+            validationConfidence = validationReport.confidence_score;
+          } catch (err: any) {
+            if (err?.name === "QuotaExhaustedError") {
+              console.error(`[knowledge_workflow/apply] Gemini quota exhausted; committing content for "${id}" with validation deferred.`);
+              validationDeferred = true;
+            } else {
+              throw err;
+            }
+          }
         }
 
-        await client.execute({
-          sql: `UPDATE technical_knowledge
-                SET content = ?, is_validated = 1, last_validated_at = CURRENT_TIMESTAMP
-                WHERE id = ?`,
-          args: [content, id],
-        });
+        if (validationDeferred) {
+          // Validation was skipped because the LLM quota was exhausted. Commit the
+          // content but leave is_validated = 0 and DON'T bump last_validated_at, so the
+          // Sentinel daemon (WHERE is_validated = 0 OR last_validated_at < -7 days)
+          // reclaims this snippet at its next cycle once quota resets.
+          await client.execute({
+            sql: `UPDATE technical_knowledge
+                  SET content = ?, is_validated = 0
+                  WHERE id = ?`,
+            args: [content, id],
+          });
+        } else {
+          await client.execute({
+            sql: `UPDATE technical_knowledge
+                  SET content = ?, is_validated = 1, last_validated_at = CURRENT_TIMESTAMP
+                  WHERE id = ?`,
+            args: [content, id],
+          });
+        }
 
         // Regenerate embedding in the background
         const topic = checkRes.rows[0].topic as string;
@@ -1126,7 +1224,11 @@ server.addTool({
           id,
           revalidated_before_commit: revalidateBeforeCommit,
           validation_status: validationStatus,
-          validation_confidence_score: validationConfidence
+          validation_confidence_score: validationConfidence,
+          ...(validationDeferred ? {
+            validation_deferred: true,
+            message: "Gemini daily quota is exhausted. Content was applied; the snippet will be auto-validated by the Sentinel daemon once quota resets (midnight Pacific).",
+          } : {}),
         }, null, 2);
       }
 
@@ -1610,9 +1712,12 @@ app.get("/api/graph", async (c) => {
 app.post("/api/validate/:id", async (c) => {
   const id = c.req.param("id");
   try {
-    const report = await validateKnowledgeItem(id);
+    const report = await validateKnowledgeItem(id, "interactive");
     return c.json({ status: "success", report });
   } catch (err: any) {
+    if (err?.name === "QuotaExhaustedError") {
+      return c.json({ status: "deferred", message: "Gemini daily quota exhausted; validation will be retried by the Sentinel daemon after reset (midnight Pacific).", id }, 202);
+    }
     return c.json({ status: "error", message: err.message }, 500);
   }
 });
@@ -1637,6 +1742,16 @@ app.get("/api/env", async (c) => {
     }
   }
   return c.json({ env: redactedEnv });
+});
+
+// LLM budget status for the dashboard badge
+app.get("/api/budget", async (c) => {
+  try {
+    const snapshot = await getBudgetSnapshot();
+    return c.json({ budget: snapshot });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
 });
 
 // Start the server using the configured transport mode
@@ -1705,12 +1820,13 @@ if (transportMode === "httpStream") {
         const id = String(target.id);
         const topic = String(target.topic);
         console.error(`[Sentinel Daemon] Auditing snippet: "${topic}" (ID: ${id})`);
-        
         try {
-          await validateKnowledgeItem(id);
-          // Wait 3 seconds between LLM calls to prevent rate limits
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await validateKnowledgeItem(id, "daemon");
         } catch (auditErr: any) {
+          if (auditErr?.name === "QuotaExhaustedError") {
+            console.error(`[Sentinel Daemon] Budget reserved for interactive use; deferring "${topic}".`);
+            break;
+          }
           console.error(`[Sentinel Daemon Warn] Failed to audit snippet "${topic}": ${auditErr.message}`);
         }
       }

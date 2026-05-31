@@ -107,9 +107,9 @@ try {
 }
 
 // 5. Test validation engine
-console.log("\n[5/6] Testing Sentinel validation engine (requires GEMINI_API_KEY or OPENAI_API_KEY)...");
-if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) {
-  console.log("  ⚠ Skipped: No GEMINI_API_KEY or OPENAI_API_KEY in environment variables.");
+console.log("\n[5/6] Testing Sentinel validation engine (requires GEMINI_API_KEY)...");
+if (!process.env.GEMINI_API_KEY) {
+  console.log("  ⚠ Skipped: No GEMINI_API_KEY in environment variables.");
 } else {
   try {
     const report = await validateKnowledgeItem(testId);

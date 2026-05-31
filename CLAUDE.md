@@ -36,12 +36,13 @@ bun audit
 |---|---|---|
 | `TURSO_DATABASE_URL` | Optional | `libsql://...` URL enables Turso embedded replica sync. Omit for local-only SQLite. |
 | `TURSO_AUTH_TOKEN` | If Turso URL set | Auth token for Turso cloud |
-| `GEMINI_API_KEY` | Optional | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`) |
-| `OPENAI_API_KEY` | Optional fallback | Used if `GEMINI_API_KEY` absent (model: `gpt-4o-mini` / `text-embedding-3-small`) |
+| `GEMINI_API_KEY` | Required for LLM features | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`). The only supported LLM provider (Gemini-only, per ADR-0001). |
 | `BRAVE_API_KEY` | Optional | Web search for Sentinel; falls back to DuckDuckGo HTML scraper if absent |
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd) |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
+
+> LLM budget caps (flash/embedding daily limits, daemon reserve, catch-up size) are stored in the `llm_budget_config` table and tuned at runtime via the `set_llm_budget` MCP tool — not via environment variables.
 
 ## Architecture
 
@@ -59,7 +60,7 @@ The server has two distinct runtime personalities, controlled by `MCP_TRANSPORT`
 | `src/index.ts` | Entry point. Defines all 11 FastMCP tools, Hono HTTP routes, auto-hook on client `connect`, background Sentinel cron, and the console log ring buffer for the dashboard. |
 | `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup. |
 | `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. |
-| `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini is primary; OpenAI is fallback. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
+| `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini-only (ADR-0001); throws if GEMINI_API_KEY is unset. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
 | `src/search.ts` | `webSearch()` (Brave → DuckDuckGo HTML scraper fallback) and `cosineSimilarity()` (in-process vector math). |
 | `src/learn.ts` | `learnCodebase(path)` — scans project root for config/manifest files, collects content, calls `analyzeCodebaseWithLLM`, stores results as "Project Context" snippets. |
 | `src/dashboard-html.ts` | Single large string export: the full HTML/JS for the Vis.js knowledge graph dashboard. |
@@ -71,7 +72,7 @@ Three tables (all in a single SQLite file):
 
 1. **`technical_knowledge`** — primary store. UUIDs as PKs, `parent_id` self-reference for hierarchy, `is_validated` / `confidence_score` / `source_url` managed by Sentinel.
 2. **`technical_knowledge_fts`** — FTS5 virtual table kept in sync via INSERT/UPDATE/DELETE triggers. Used as primary search index before falling back to `LIKE`.
-3. **`technical_knowledge_embeddings`** — stores Gemini/OpenAI vector embeddings as JSON-serialized `TEXT`. Cosine similarity is computed in TypeScript, not in the database.
+3. **`technical_knowledge_embeddings`** — stores Gemini vector embeddings as JSON-serialized `TEXT`. Cosine similarity is computed in TypeScript, not in the database.
 
 When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded replica: reads are local (microsecond), writes are committed locally then async-synced to Turso cloud. The `isEmbeddedReplica` flag in `db.ts` gates all `client.sync()` calls.
 

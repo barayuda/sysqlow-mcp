@@ -141,7 +141,11 @@ export const dashboardHtml = `<!DOCTYPE html>
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
         Container SSE Port 50741 Active
       </span>
-      
+
+      <span id="llm-budget-badge" title="Gemini quota usage today (resets at midnight Pacific)" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-mono font-medium bg-slate-500/10 text-slate-600 dark:text-slate-300 border border-slate-500/20">
+        budget: loading…
+      </span>
+
       <!-- Theme Selection Segmented Toggle -->
       <div class="flex items-center bg-slate-500/5 dark:bg-white/5 border border-slate-500/10 dark:border-white/10 rounded-xl p-0.5 space-x-0.5">
         <button id="theme-btn-light" onclick="setTheme('light')" class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition" title="Light Mode">
@@ -404,10 +408,25 @@ export const dashboardHtml = `<!DOCTYPE html>
       refreshData();
       fetchLogs();
       fetchEnv();
-      
+      refreshBudget();
+
       // Auto-poll logs every 4 seconds
       setInterval(fetchLogs, 4000);
+      // Auto-poll LLM budget every 60 seconds
+      setInterval(refreshBudget, 60000);
     });
+
+    // Read-only LLM budget badge
+    async function refreshBudget() {
+      try {
+        const r = await fetch('/api/budget');
+        const { budget } = await r.json();
+        const txt = budget.map(b => \`\${b.model.includes('embedding') ? 'embed' : 'flash'} \${b.count}/\${b.limit}\${b.exhausted ? ' ⛔' : ''}\`).join(' · ');
+        document.getElementById('llm-budget-badge').textContent = 'budget: ' + txt;
+      } catch (_) {
+        document.getElementById('llm-budget-badge').textContent = 'budget: n/a';
+      }
+    }
 
     let physicsEnabled = true;
 
