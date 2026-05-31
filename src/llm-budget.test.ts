@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { createClient, type Client } from "@libsql/client";
-import { ensureBudgetSchema, pacificDate } from "./llm-budget";
+import { ensureBudgetSchema, pacificDate, canSpend, record, markExhausted } from "./llm-budget";
 
 async function freshDb(): Promise<Client> {
   const db = createClient({ url: ":memory:" });
@@ -41,5 +41,53 @@ describe("pacificDate", () => {
   test("handles PST (winter) offset", () => {
     // 2026-01-15T07:30:00Z == 2026-01-14 23:30 PST (still the 14th)
     expect(pacificDate(new Date("2026-01-15T07:30:00Z"))).toBe("2026-01-14");
+  });
+});
+
+describe("canSpend / record", () => {
+  const NOW = new Date("2026-05-29T20:00:00Z"); // 2026-05-29 in LA
+
+  test("fresh day: both callers allowed", async () => {
+    const db = await freshDb();
+    expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(true);
+    expect(await canSpend("gemini-2.5-flash", "daemon", NOW, db)).toBe(true);
+  });
+
+  test("daemon blocked at limit-reserve, interactive still allowed", async () => {
+    const db = await freshDb();
+    // flash daemon ceiling = flash_daily_limit(20) - flash_daemon_reserve(8) = 12
+    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", NOW, db);
+    expect(await canSpend("gemini-2.5-flash", "daemon", NOW, db)).toBe(false);
+    expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(true);
+  });
+
+  test("interactive blocked at absolute limit", async () => {
+    const db = await freshDb();
+    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", NOW, db);
+    expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(false);
+  });
+
+  test("counter is per-model and per-day", async () => {
+    const db = await freshDb();
+    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", NOW, db);
+    expect(await canSpend("gemini-embedding-001", "interactive", NOW, db)).toBe(true);
+    const tomorrow = new Date("2026-05-30T20:00:00Z");
+    expect(await canSpend("gemini-2.5-flash", "interactive", tomorrow, db)).toBe(true);
+  });
+
+  test("markExhausted blocks today, clears tomorrow", async () => {
+    const db = await freshDb();
+    await markExhausted("gemini-2.5-flash", NOW, db);
+    expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(false);
+    const tomorrow = new Date("2026-05-30T20:00:00Z");
+    expect(await canSpend("gemini-2.5-flash", "interactive", tomorrow, db)).toBe(true);
+  });
+
+  test("embeddings: daemon ceiling == full limit (no reserve)", async () => {
+    const db = await freshDb();
+    for (let i = 0; i < 99; i++) await record("gemini-embedding-001", NOW, db);
+    expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(true);
+    await record("gemini-embedding-001", NOW, db);
+    expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(false);
   });
 });
