@@ -118,6 +118,34 @@ export async function markExhausted(
   });
 }
 
+export function parseRetryInfo(body: any): { kind: "rpm" | "daily"; retryDelayMs: number | null } {
+  const details: any[] = body?.error?.details ?? [];
+  let retryDelayMs: number | null = null;
+  let isDaily = false;
+
+  for (const d of details) {
+    const type = String(d?.["@type"] ?? "");
+    if (type.includes("RetryInfo") && typeof d.retryDelay === "string") {
+      const m = d.retryDelay.match(/^([\d.]+)s$/);
+      if (m) retryDelayMs = Math.round(parseFloat(m[1]) * 1000);
+    }
+    if (type.includes("QuotaFailure")) {
+      for (const v of d?.violations ?? []) {
+        const tag = `${v?.quotaId ?? ""} ${v?.quotaMetric ?? ""}`.toLowerCase();
+        if (tag.includes("perday") || tag.includes("per_day") || tag.includes("requests_per_day") || tag.includes("daily")) {
+          isDaily = true;
+        }
+      }
+    }
+  }
+
+  // A 429 we can't positively identify as per-minute is treated as daily so we
+  // stop hammering a cap that won't clear until midnight.
+  const kind: "rpm" | "daily" =
+    isDaily ? "daily" : retryDelayMs !== null && retryDelayMs < 60_000 ? "rpm" : "daily";
+  return { kind, retryDelayMs };
+}
+
 const PACIFIC_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/Los_Angeles",
   year: "numeric",

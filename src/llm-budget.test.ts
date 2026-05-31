@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { createClient, type Client } from "@libsql/client";
-import { ensureBudgetSchema, pacificDate, canSpend, record, markExhausted } from "./llm-budget";
+import { ensureBudgetSchema, pacificDate, canSpend, record, markExhausted, parseRetryInfo } from "./llm-budget";
 
 async function freshDb(): Promise<Client> {
   const db = createClient({ url: ":memory:" });
@@ -89,5 +89,39 @@ describe("canSpend / record", () => {
     expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(true);
     await record("gemini-embedding-001", NOW, db);
     expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(false);
+  });
+});
+
+describe("parseRetryInfo", () => {
+  const rpmBody = {
+    error: {
+      code: 429,
+      details: [
+        { "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{ quotaMetric: "generativelanguage.googleapis.com/generate_content_requests_per_minute" }] },
+        { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "27s" },
+      ],
+    },
+  };
+  const dailyBody = {
+    error: {
+      code: 429,
+      details: [
+        { "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{ quotaId: "GenerateRequestsPerDayPerProjectPerModel-FreeTier",
+                         quotaMetric: "generativelanguage.googleapis.com/generate_content_requests_per_day" }] },
+        { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "53s" },
+      ],
+    },
+  };
+
+  test("classifies per-minute throttle as rpm with delay", () => {
+    expect(parseRetryInfo(rpmBody)).toEqual({ kind: "rpm", retryDelayMs: 27000 });
+  });
+  test("classifies per-day cap as daily regardless of short retryDelay", () => {
+    expect(parseRetryInfo(dailyBody)).toEqual({ kind: "daily", retryDelayMs: 53000 });
+  });
+  test("missing details defaults to daily (safe: stop trying)", () => {
+    expect(parseRetryInfo({ error: { code: 429 } })).toEqual({ kind: "daily", retryDelayMs: null });
   });
 });
