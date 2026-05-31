@@ -42,3 +42,15 @@ export async function ensureBudgetSchema(db: Client = defaultClient): Promise<vo
     });
   }
 }
+
+const PACIFIC_DATE_FMT = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Los_Angeles",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export function pacificDate(now: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD.
+  return PACIFIC_DATE_FMT.format(now);
+}

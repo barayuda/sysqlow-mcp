@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { createClient, type Client } from "@libsql/client";
-import { ensureBudgetSchema } from "./llm-budget";
+import { ensureBudgetSchema, pacificDate } from "./llm-budget";
 
 async function freshDb(): Promise<Client> {
   const db = createClient({ url: ":memory:" });
@@ -27,5 +27,19 @@ describe("ensureBudgetSchema", () => {
     await ensureBudgetSchema(db);
     const res = await db.execute("SELECT value FROM llm_budget_config WHERE key = 'flash_daily_limit'");
     expect(Number(res.rows[0].value)).toBe(99);
+  });
+});
+
+describe("pacificDate", () => {
+  test("returns YYYY-MM-DD in America/Los_Angeles", () => {
+    // 2026-05-29T05:00:00Z == 2026-05-28 22:00 PDT (still the 28th in LA)
+    expect(pacificDate(new Date("2026-05-29T05:00:00Z"))).toBe("2026-05-28");
+    // 2026-05-29T08:00:00Z == 2026-05-29 01:00 PDT
+    expect(pacificDate(new Date("2026-05-29T08:00:00Z"))).toBe("2026-05-29");
+  });
+
+  test("handles PST (winter) offset", () => {
+    // 2026-01-15T07:30:00Z == 2026-01-14 23:30 PST (still the 14th)
+    expect(pacificDate(new Date("2026-01-15T07:30:00Z"))).toBe("2026-01-14");
   });
 });
