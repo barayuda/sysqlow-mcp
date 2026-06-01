@@ -72,11 +72,16 @@ If you don't want to use the Blueprint:
    |---|---|
    | `SYSQLOW_DB_REMOTE_ONLY` | `1` |
    | `MCP_TRANSPORT` | `sse` |
-   | `PORT` | `50741` |
    | `TURSO_DATABASE_URL` | `libsql://...` |
    | `TURSO_AUTH_TOKEN` | *(your token)* |
    | `GEMINI_API_KEY` | *(your key)* |
    | `BRAVE_API_KEY` | *(optional)* |
+
+   **Do not set `PORT`.** Render injects its own value and routes external
+   traffic to whatever port the service binds. The app reads
+   `process.env.PORT` and falls back to `50741` when unset, so it works
+   either way — but declaring `PORT` here can shadow Render's value and
+   break routing.
 
 4. **Health check path:** `/` (the static dashboard — avoid `/api/budget` or
    `/api/graph` because they hit Turso on every poll and burn quota).
