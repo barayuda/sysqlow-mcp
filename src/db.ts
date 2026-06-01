@@ -6,6 +6,13 @@ import path from "node:path";
 const dbUrl = process.env.TURSO_DATABASE_URL;
 const dbToken = process.env.TURSO_AUTH_TOKEN;
 
+// True iff the URL looks like a remote Turso endpoint (cloud-served).
+// Extracted so the scheme list lives in one place — three call sites below
+// previously inlined the same check and would silently drift if a new
+// scheme were ever supported.
+const isRemoteDbUrl = (u?: string): boolean =>
+  !!u && (u.startsWith("libsql://") || u.startsWith("https://"));
+
 // Opt-in: connect directly to Turso with no local SQLite file. Intended for
 // ephemeral-disk hosts (Render.com free, Fly.io machines without volumes, etc.)
 // where embedded-replica mode would just thrash a file that gets wiped on every
@@ -21,7 +28,7 @@ if (isRemoteOnly) {
       "SYSQLOW_DB_REMOTE_ONLY=1 requires TURSO_DATABASE_URL to be set (libsql:// or https://).",
     );
   }
-  if (!(dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://"))) {
+  if (!isRemoteDbUrl(dbUrl)) {
     throw new Error(
       `SYSQLOW_DB_REMOTE_ONLY=1 requires a libsql:// or https:// TURSO_DATABASE_URL; got "${dbUrl}".`,
     );
@@ -56,8 +63,7 @@ const localDbUrl = localDbPath
 
 // Detect if we should use Turso's Embedded Replicas (local-first SQLite sync'd to cloud).
 // Remote-only mode short-circuits this: even with a libsql:// URL we want a direct client.
-export const isEmbeddedReplica = !isRemoteOnly &&
-  !!(dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")));
+export const isEmbeddedReplica = !isRemoteOnly && isRemoteDbUrl(dbUrl);
 
 const effectiveDbMode = isRemoteOnly
   ? "remote-only"
@@ -75,7 +81,7 @@ console.error(
   `[DB Mode Guard] mode=${effectiveDbMode} | local=${localDbUrl ?? "none"} | syncTarget=${syncTarget}`
 );
 
-if (!isRemoteOnly && !isEmbeddedReplica && dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")) === false) {
+if (!isRemoteOnly && !isEmbeddedReplica && dbUrl && !isRemoteDbUrl(dbUrl)) {
   console.error(
     `[DB Mode Guard] TURSO_DATABASE_URL is set but not libsql/https. Embedded replica sync is disabled.`
   );
