@@ -359,6 +359,12 @@ Simply execute the included bash script to clean, rebuild, and start the contain
 
 This binds port **`50741`** on your local machine to the container, directing database replica files securely to the mounted `data/` directory.
 
+> **☁️ Deploying to a remote host (Render, Fly, Railway)?**
+> See [`docs/deploying-to-render.md`](docs/deploying-to-render.md) for the
+> remote-only DB mode (`SYSQLOW_DB_REMOTE_ONLY=1`) that skips the local
+> SQLite cache — required for hosts with ephemeral disk. The repo also
+> ships a `render.yaml` Blueprint for one-click Render deploys.
+
 > [!WARNING]
 > **🔒 Security Checklist & Data Leak Prevention Audit (TODO):**
 > To enable seamless multi-workspace scanning across different folders, `run-docker.sh` dynamically mirrors the host's home folder (`-v $HOME:$HOME`) into the Docker sandbox.

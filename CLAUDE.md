@@ -36,9 +36,10 @@ bun audit
 |---|---|---|
 | `TURSO_DATABASE_URL` | Optional | `libsql://...` URL enables Turso embedded replica sync. Omit for local-only SQLite. |
 | `TURSO_AUTH_TOKEN` | If Turso URL set | Auth token for Turso cloud |
+| `SYSQLOW_DB_REMOTE_ONLY` | Optional | Set to `1` to connect directly to Turso with no local SQLite file. Required for ephemeral-disk hosts (Render free, Fly machines without volumes). Fails loud at boot if `TURSO_DATABASE_URL` (libsql/https) or `TURSO_AUTH_TOKEN` is missing. Tradeoff: every read is a network round-trip — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md). |
 | `GEMINI_API_KEY` | Required for LLM features | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`). The only supported LLM provider (Gemini-only, per ADR-0001). |
 | `BRAVE_API_KEY` | Optional | Web search for Sentinel; falls back to DuckDuckGo HTML scraper if absent |
-| `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd) |
+| `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
 
