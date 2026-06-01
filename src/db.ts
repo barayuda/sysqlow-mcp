@@ -6,38 +6,76 @@ import path from "node:path";
 const dbUrl = process.env.TURSO_DATABASE_URL;
 const dbToken = process.env.TURSO_AUTH_TOKEN;
 
-// Configurable local SQLite file path, defaulting to sysqlow.db in the Cwd
-const localDbPath = process.env.LOCAL_DB_PATH || "sysqlow.db";
+// Opt-in: connect directly to Turso with no local SQLite file. Intended for
+// ephemeral-disk hosts (Render.com free, Fly.io machines without volumes, etc.)
+// where embedded-replica mode would just thrash a file that gets wiped on every
+// cold start. Fails loud at boot if its preconditions aren't met — the silent
+// fall-back to ephemeral local SQLite would lose all knowledge on restart.
+export const isRemoteOnly = ["1", "true", "yes"].includes(
+  (process.env.SYSQLOW_DB_REMOTE_ONLY ?? "").toLowerCase(),
+);
 
-// Ensure parent directory exists for the SQLite database file
-const cleanPath = localDbPath.startsWith("file:") ? localDbPath.slice(5) : localDbPath;
-if (cleanPath && cleanPath !== "sysqlow.db" && !cleanPath.startsWith(":memory:")) {
-  const dir = path.dirname(cleanPath);
-  if (dir && dir !== "." && !fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+if (isRemoteOnly) {
+  if (!dbUrl) {
+    throw new Error(
+      "SYSQLOW_DB_REMOTE_ONLY=1 requires TURSO_DATABASE_URL to be set (libsql:// or https://).",
+    );
+  }
+  if (!(dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://"))) {
+    throw new Error(
+      `SYSQLOW_DB_REMOTE_ONLY=1 requires a libsql:// or https:// TURSO_DATABASE_URL; got "${dbUrl}".`,
+    );
+  }
+  if (!dbToken) {
+    throw new Error(
+      "SYSQLOW_DB_REMOTE_ONLY=1 requires TURSO_AUTH_TOKEN to be set.",
+    );
   }
 }
 
-const localDbUrl = localDbPath.startsWith("file:") ? localDbPath : `file:${localDbPath}`;
+// Local filesystem prep only runs when we might actually open a file. In
+// remote-only mode we skip it entirely so containers without writable disk
+// (Render free, Fly machines without volumes) don't trip on mkdirSync.
+const localDbPath = isRemoteOnly ? null : process.env.LOCAL_DB_PATH || "sysqlow.db";
 
-// Detect if we should use Turso's Embedded Replicas (local-first SQLite sync'd to cloud)
-export const isEmbeddedReplica = !!(dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")));
+if (localDbPath) {
+  const cleanPath = localDbPath.startsWith("file:") ? localDbPath.slice(5) : localDbPath;
+  if (cleanPath && cleanPath !== "sysqlow.db" && !cleanPath.startsWith(":memory:")) {
+    const dir = path.dirname(cleanPath);
+    if (dir && dir !== "." && !fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+}
 
-const effectiveDbMode = isEmbeddedReplica
-  ? "embedded-replica-sync"
-  : !dbUrl
-    ? "local-only"
-    : dbUrl.startsWith("file:")
-      ? "local-file-url"
-      : "direct-url-no-embedded-sync";
+const localDbUrl = localDbPath
+  ? localDbPath.startsWith("file:")
+    ? localDbPath
+    : `file:${localDbPath}`
+  : null;
+
+// Detect if we should use Turso's Embedded Replicas (local-first SQLite sync'd to cloud).
+// Remote-only mode short-circuits this: even with a libsql:// URL we want a direct client.
+export const isEmbeddedReplica = !isRemoteOnly &&
+  !!(dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")));
+
+const effectiveDbMode = isRemoteOnly
+  ? "remote-only"
+  : isEmbeddedReplica
+    ? "embedded-replica-sync"
+    : !dbUrl
+      ? "local-only"
+      : dbUrl.startsWith("file:")
+        ? "local-file-url"
+        : "direct-url-no-embedded-sync";
 
 const syncTarget = isEmbeddedReplica ? dbUrl : "none";
 
 console.error(
-  `[DB Mode Guard] mode=${effectiveDbMode} | local=${localDbUrl} | syncTarget=${syncTarget}`
+  `[DB Mode Guard] mode=${effectiveDbMode} | local=${localDbUrl ?? "none"} | syncTarget=${syncTarget}`
 );
 
-if (!isEmbeddedReplica && dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")) === false) {
+if (!isRemoteOnly && !isEmbeddedReplica && dbUrl && (dbUrl.startsWith("libsql://") || dbUrl.startsWith("https://")) === false) {
   console.error(
     `[DB Mode Guard] TURSO_DATABASE_URL is set but not libsql/https. Embedded replica sync is disabled.`
   );
@@ -47,7 +85,9 @@ if (isEmbeddedReplica && !dbToken) {
   console.error("[DB Mode Guard] Embedded replica mode detected, but TURSO_AUTH_TOKEN is missing.");
 }
 
-if (isEmbeddedReplica) {
+if (isRemoteOnly) {
+  console.error(`Configuring database in remote-only mode (direct Turso client, no local file)...`);
+} else if (isEmbeddedReplica) {
   console.error(`Configuring database as local-first Embedded Replica (local SQLite "${localDbUrl}" synced with remote Turso)...`);
 } else if (!dbUrl) {
   console.error(`TURSO_DATABASE_URL environment variable is not defined. Using standalone local SQLite database: ${localDbUrl}`);
@@ -56,17 +96,22 @@ if (isEmbeddedReplica) {
 }
 
 export const client = createClient(
-  isEmbeddedReplica
+  isRemoteOnly
     ? {
-        url: localDbUrl, // Use the dynamically configured path!
-        syncUrl: dbUrl!,
-        authToken: dbToken,
-        syncInterval: 60, // Auto-sync every 60 seconds in the background
-      }
-    : {
-        url: dbUrl || localDbUrl,
+        url: dbUrl!,
         authToken: dbToken,
       }
+    : isEmbeddedReplica
+      ? {
+          url: localDbUrl!, // Use the dynamically configured path!
+          syncUrl: dbUrl!,
+          authToken: dbToken,
+          syncInterval: 60, // Auto-sync every 60 seconds in the background
+        }
+      : {
+          url: dbUrl || localDbUrl!,
+          authToken: dbToken,
+        }
 );
 
 function splitSqlStatements(sql: string): string[] {

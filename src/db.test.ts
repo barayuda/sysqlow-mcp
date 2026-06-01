@@ -1,0 +1,116 @@
+import { describe, test, expect } from "bun:test";
+
+// db.ts runs side effects (env validation, fs.mkdirSync, client creation) at
+// module-load time, and Bun caches modules across tests within a single run.
+// To test boot-time behavior honestly we spawn a fresh subprocess per case
+// with a small inline harness that imports db.ts and prints the result.
+async function probeDbBoot(env: Record<string, string>): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const harness = `
+    try {
+      const mod = await import("./src/db.ts");
+      console.log(JSON.stringify({
+        ok: true,
+        isRemoteOnly: mod.isRemoteOnly,
+        isEmbeddedReplica: mod.isEmbeddedReplica,
+      }));
+    } catch (err) {
+      console.log(JSON.stringify({ ok: false, message: String(err && err.message || err) }));
+      process.exit(1);
+    }
+  `;
+  const proc = Bun.spawn({
+    cmd: ["bun", "-e", harness],
+    cwd: process.cwd(),
+    env: { ...process.env, ...env, SYSQLOW_DB_REMOTE_ONLY: env.SYSQLOW_DB_REMOTE_ONLY ?? "" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  const exitCode = await proc.exited;
+  return { exitCode, stdout, stderr };
+}
+
+describe("SYSQLOW_DB_REMOTE_ONLY", () => {
+  test("flag off: behavior unchanged (local-only when no URL set)", async () => {
+    const { exitCode, stdout } = await probeDbBoot({
+      SYSQLOW_DB_REMOTE_ONLY: "",
+      TURSO_DATABASE_URL: "",
+      TURSO_AUTH_TOKEN: "",
+    });
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    expect(result.ok).toBe(true);
+    expect(result.isRemoteOnly).toBe(false);
+    expect(result.isEmbeddedReplica).toBe(false);
+  });
+
+  test("flag on with valid libsql URL + token: boots in remote-only mode", async () => {
+    const { exitCode, stdout, stderr } = await probeDbBoot({
+      SYSQLOW_DB_REMOTE_ONLY: "1",
+      TURSO_DATABASE_URL: "libsql://fake-host.turso.io",
+      TURSO_AUTH_TOKEN: "fake-token",
+    });
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    expect(result.ok).toBe(true);
+    expect(result.isRemoteOnly).toBe(true);
+    expect(result.isEmbeddedReplica).toBe(false);
+    expect(stderr).toContain("mode=remote-only");
+  });
+
+  test("flag on without TURSO_DATABASE_URL: throws at boot", async () => {
+    const { exitCode, stdout } = await probeDbBoot({
+      SYSQLOW_DB_REMOTE_ONLY: "1",
+      TURSO_DATABASE_URL: "",
+      TURSO_AUTH_TOKEN: "fake-token",
+    });
+    expect(exitCode).not.toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("requires TURSO_DATABASE_URL");
+  });
+
+  test("flag on with file: URL: rejects (must be libsql/https)", async () => {
+    const { exitCode, stdout } = await probeDbBoot({
+      SYSQLOW_DB_REMOTE_ONLY: "1",
+      TURSO_DATABASE_URL: "file:./sysqlow.db",
+      TURSO_AUTH_TOKEN: "fake-token",
+    });
+    expect(exitCode).not.toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("libsql:// or https://");
+  });
+
+  test("flag on without TURSO_AUTH_TOKEN: throws at boot", async () => {
+    const { exitCode, stdout } = await probeDbBoot({
+      SYSQLOW_DB_REMOTE_ONLY: "1",
+      TURSO_DATABASE_URL: "libsql://fake-host.turso.io",
+      TURSO_AUTH_TOKEN: "",
+    });
+    expect(exitCode).not.toBe(0);
+    const result = JSON.parse(stdout.trim().split("\n").pop()!);
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("requires TURSO_AUTH_TOKEN");
+  });
+
+  test("accepts 'true' and 'yes' as truthy values", async () => {
+    for (const value of ["true", "yes", "TRUE"]) {
+      const { exitCode, stdout } = await probeDbBoot({
+        SYSQLOW_DB_REMOTE_ONLY: value,
+        TURSO_DATABASE_URL: "libsql://fake-host.turso.io",
+        TURSO_AUTH_TOKEN: "fake-token",
+      });
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout.trim().split("\n").pop()!);
+      expect(result.isRemoteOnly).toBe(true);
+    }
+  });
+});
