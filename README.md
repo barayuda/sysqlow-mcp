@@ -365,14 +365,47 @@ This binds port **`50741`** on your local machine to the container, directing da
 > SQLite cache — required for hosts with ephemeral disk. The repo also
 > ships a `render.yaml` Blueprint for one-click Render deploys.
 
-> [!WARNING]
-> **🔒 Security Checklist & Data Leak Prevention Audit (TODO):**
-> To enable seamless multi-workspace scanning across different folders, `run-docker.sh` dynamically mirrors the host's home folder (`-v $HOME:$HOME`) into the Docker sandbox.
-> * **Exposure Risks:** Because the containerized MCP server receives direct read-write permissions mapped to the host's `$HOME` tree, any unverified third-party libraries, compromised runtime dependencies, or untrusted scripts executed inside the container could potentially scan and leak sensitive host credentials (such as `~/.ssh/`, `~/.aws/credentials`, `~/.npmrc`, or local system `.env` files).
-> * **Audit Steps & Mitigations:**
->   - [ ] **Restrict Mount Scope:** If your machine handles highly sensitive credentials, modify the `VOLUME_MOUNT` logic in `run-docker.sh` to bind-mount a dedicated, restricted workspace folder (e.g., `-v $HOME/Projects:$HOME/Projects`) instead of the root `$HOME` folder.
->   - [ ] **File Access Logs Verification:** Regularly review the container's file read operations inside standard diagnostics to guarantee that the server never reads directories outside designated development workspaces.
->   - [ ] **Minimize Secret Injection:** Ensure that only essential variables are passed to the container, and critical cloud keys (like `GEMINI_API_KEY` or `TURSO_AUTH_TOKEN`) are secured and masked by the dashboard interface.
+> [!IMPORTANT]
+> **🔒 Docker mount scope — secure by default:**
+> `run-docker.sh` no longer mounts `$HOME` into the container. By default it
+> exposes only two paths:
+> 1. **The sysqlow-mcp checkout itself** — so the binary and assets are available.
+> 2. **The invocation cwd** (`$PWD` when you launched `run-docker.sh`) — so
+>    the coherence engine can detect the workspace you're working in.
+>
+> Sensitive directories like `~/.ssh/`, `~/.aws/credentials`, `~/.npmrc`, or
+> arbitrary `.env` files outside those two paths are **not** reachable from
+> inside the container. The script prints the exact mounted paths on every
+> run so you can audit what's exposed.
+>
+> **Multi-workspace opt-in:** if you jump between several project roots in a
+> single session, set `SYSQLOW_WORKSPACE_ROOTS` to a comma-separated list
+> of absolute paths. The script expands `~`, skips non-existent entries
+> with a warning, and collapses any nested paths to the shortest covering
+> ancestor (so `~/Projects` and `~/Projects/foo` won't produce overlapping
+> Docker mounts).
+>
+> ```bash
+> # Example: expose two unrelated workspace roots
+> SYSQLOW_WORKSPACE_ROOTS="~/Projects,~/work" ./run-docker.sh
+> ```
+>
+> **Breaking change for upgraders:** previous versions silently mounted
+> `$HOME` whenever the project lived under it. If you rely on scanning
+> projects outside the new mount scope, set `SYSQLOW_WORKSPACE_ROOTS`
+> to include them — otherwise `detectCurrentProject()` won't see those
+> directories on subsequent runs. Existing rows in the knowledge base
+> are unaffected; only the *detection* of new project roots is scoped.
+>
+> **Other hardening tips that still apply:**
+> * **Minimize secret injection.** Only `TURSO_*`, `GEMINI_API_KEY`,
+>   `BRAVE_API_KEY`, `MCP_TRANSPORT`, `PORT`, and `SYSQLOW_WORKSPACE_DIR`
+>   are passed into the container by default — review `run-docker.sh`
+>   before adding more.
+> * **Dashboard is not authenticated.** The `/` dashboard and `/api/*`
+>   endpoints in SSE mode have no auth layer. Bind to `127.0.0.1` (the
+>   default Render setup uses Render's edge for TLS + access control) or
+>   run behind a reverse proxy with auth before exposing publicly.
 
 
 ---

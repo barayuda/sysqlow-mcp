@@ -16,17 +16,83 @@ DATA_DIR="$PROJECT_DIR/data"
 ENV_FILE="$PROJECT_DIR/.env"
 CONTAINER_NAME="sysqlow-mcp"
 
-# Dynamically mount parent directories to allow scanning multi-workspaces inside Docker.
-# If the project is within the user's HOME directory, we mount the entire HOME folder
-# to ensure absolute path parity for all projects. Otherwise, we mount the parent of the project.
-VOLUME_MOUNT="-v $PROJECT_DIR:$PROJECT_DIR"
-if [[ "$PROJECT_DIR" == "$HOME"* ]]; then
-  echo "🏠 Project detected within HOME. Mirroring HOME directory for cross-workspace compatibility..." >&2
-  VOLUME_MOUNT="-v $HOME:$HOME"
-else
-  PARENT_DIR="$(dirname "$PROJECT_DIR")"
-  echo "📁 Project detected outside HOME. Mirroring parent directory: $PARENT_DIR..." >&2
-  VOLUME_MOUNT="-v $PARENT_DIR:$PARENT_DIR"
+# ---------------------------------------------------------
+# Secure-by-default mount scope
+# ---------------------------------------------------------
+# Previous versions of this script mounted the entire $HOME directory into
+# the container whenever the project lived under $HOME. That gave the
+# container read/write access to ~/.ssh, ~/.aws/credentials, ~/.npmrc, etc.
+# — a large blast radius if any dependency inside the container were
+# ever compromised.
+#
+# New behavior: mount only the paths the server actually needs to do its
+# job — by default the sysqlow-mcp checkout itself and the host workspace
+# the MCP client was launched from (captured in HOST_WORKSPACE_DIR below
+# before we cd into PROJECT_DIR). Users who jump between multiple
+# workspaces in one session can opt in to additional roots via the
+# SYSQLOW_WORKSPACE_ROOTS env var (comma-separated absolute paths; `~`
+# is expanded to $HOME). Nested paths are collapsed to the shortest
+# covering ancestor so Docker doesn't error on overlapping mounts.
+#
+# See README.md "Security Checklist & Data Leak Prevention Audit" and
+# .env.example section 6 for the user-facing documentation.
+
+# Capture the host's invocation cwd BEFORE we `cd` into the project
+# directory, so the coherence engine inside the container can detect
+# which workspace the MCP client was launched from. (Previously this
+# only fed SYSQLOW_WORKSPACE_DIR; now it also drives mount scope.)
+HOST_WORKSPACE_DIR="$PWD"
+
+declare -a MOUNT_CANDIDATES
+MOUNT_CANDIDATES+=("$PROJECT_DIR")
+
+if [ -n "$HOST_WORKSPACE_DIR" ] \
+   && [ -d "$HOST_WORKSPACE_DIR" ] \
+   && [ "$HOST_WORKSPACE_DIR" != "/" ]; then
+  MOUNT_CANDIDATES+=("$HOST_WORKSPACE_DIR")
+fi
+
+if [ -n "${SYSQLOW_WORKSPACE_ROOTS:-}" ]; then
+  while IFS= read -r raw_root; do
+    # Trim whitespace; expand leading ~ to $HOME.
+    root="${raw_root#"${raw_root%%[![:space:]]*}"}"
+    root="${root%"${root##*[![:space:]]}"}"
+    root="${root/#\~/$HOME}"
+    [ -z "$root" ] && continue
+    if [ -d "$root" ]; then
+      MOUNT_CANDIDATES+=("$root")
+    else
+      echo "⚠️  SYSQLOW_WORKSPACE_ROOTS entry '$root' is not a directory; skipping." >&2
+    fi
+  done < <(echo "$SYSQLOW_WORKSPACE_ROOTS" | tr ',' '\n')
+fi
+
+# Collapse nested paths: process shortest-first, drop any candidate that
+# already nests under an accepted mount. (Docker errors on overlapping
+# bind mounts on some platforms; this also keeps the -v flag list minimal.)
+declare -a MOUNT_PATHS
+while IFS= read -r cand; do
+  [ -z "$cand" ] && continue
+  is_nested=0
+  for kept in "${MOUNT_PATHS[@]:-}"; do
+    [ -z "$kept" ] && continue
+    case "$cand" in
+      "$kept"|"$kept"/*) is_nested=1; break ;;
+    esac
+  done
+  if [ "$is_nested" -eq 0 ]; then
+    MOUNT_PATHS+=("$cand")
+  fi
+done < <(printf '%s\n' "${MOUNT_CANDIDATES[@]}" | awk '{ print length, $0 }' | sort -n | cut -d' ' -f2-)
+
+VOLUME_MOUNT=""
+echo "🔒 Mounting host paths into container (secure-by-default):" >&2
+for path in "${MOUNT_PATHS[@]}"; do
+  echo "   • $path" >&2
+  VOLUME_MOUNT="$VOLUME_MOUNT -v $path:$path"
+done
+if [ -z "${SYSQLOW_WORKSPACE_ROOTS:-}" ]; then
+  echo "   (set SYSQLOW_WORKSPACE_ROOTS=~/path1,~/path2 to expose extra workspace roots)" >&2
 fi
 
 # Default configuration parameters
@@ -44,13 +110,9 @@ if [ "$1" == "--sse" ] || [ "$1" == "-s" ]; then
   MCP_TRANSPORT="sse"
 fi
 
-# Capture the host's invocation cwd BEFORE we `cd` into the project directory,
-# so the coherence engine inside the container can detect which workspace the
-# MCP client (Cursor, Claude Desktop, Antigravity, etc.) was launched from.
-# Without this, every Project Context snippet would be tagged with sysqlow-mcp's
-# own /app directory instead of the user's actual workspace.
-HOST_WORKSPACE_DIR="$PWD"
-
+# HOST_WORKSPACE_DIR was captured earlier (before mount-scope resolution
+# needed it). Keep that capture as the single source of truth and just
+# `cd` into the project here.
 cd "$PROJECT_DIR"
 
 # Save stdout to FD 3, and redirect stdout to stderr for the setup and build phases.
