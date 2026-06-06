@@ -1,0 +1,51 @@
+# Render.com Blueprint for sysqlow-mcp.
+#
+# Deploy via: https://render.com/deploy?repo=https://github.com/<your-fork>
+# or by pointing an existing Render account at this repo and choosing
+# "Apply Blueprint".
+#
+# Targets Render's free tier, which has ephemeral disk and scale-to-zero.
+# Both are incompatible with libSQL embedded-replica mode (the local
+# SQLite file gets wiped on every cold start), so this blueprint forces
+# direct-Turso mode via SYSQLOW_DB_REMOTE_ONLY=1.
+#
+# See docs/deploying-to-render.md for full instructions, latency
+# expectations, and troubleshooting.
+services:
+  - type: web
+    name: sysqlow-mcp
+    runtime: docker
+    plan: free
+    # The dashboard root returns static HTML and touches no DB / external
+    # services, so it's a safe healthcheck that won't burn Turso quota on
+    # Render's polling interval. (Avoid /api/budget or /api/graph here —
+    # those hit Turso on every check.)
+    healthCheckPath: /
+    envVars:
+      # Force direct-Turso client; no local SQLite file is created.
+      - key: SYSQLOW_DB_REMOTE_ONLY
+        value: "1"
+
+      # SSE transport is required for a remote MCP server — stdio mode
+      # only makes sense when the MCP client spawns the binary directly.
+      - key: MCP_TRANSPORT
+        value: sse
+
+      # PORT is intentionally NOT declared here. Render injects PORT into
+      # the container and routes external traffic to whatever port the
+      # service binds to. Declaring it in this Blueprint would either
+      # shadow Render's value (breaking routing if Render picks a
+      # different port) or get silently overridden (making the entry
+      # misleading). The app reads process.env.PORT with a 50741 default
+      # — see src/index.ts:1760.
+
+      # Secrets: Render will prompt for these in the dashboard during
+      # the first deploy. sync: false keeps them out of git.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: BRAVE_API_KEY
+        sync: false

@@ -61,7 +61,8 @@ You can have both at once (different clients connecting to whichever fits).
 | You have | You unlock |
 |---|---|
 | Just Bun | Local SQLite, store/recall via FTS5 + LIKE, no validator, no embeddings |
-| + Turso URL & token | Multi-device sync via embedded replica |
+| + Turso URL & token | Multi-device sync via embedded replica (local cache + background sync) |
+| + Turso URL & token + `SYSQLOW_DB_REMOTE_ONLY=1` | Direct-to-Turso, no local file — for ephemeral-disk hosts (Render free, Fly without volumes). See [`deploying-to-render.md`](deploying-to-render.md) |
 | + GEMINI_API_KEY | Sentinel validator + semantic search + `import_documentation` LLM extraction |
 | + BRAVE_API_KEY | Higher-quality web search for Sentinel (vs. DuckDuckGo HTML scraping) |
 
@@ -115,15 +116,23 @@ GEMINI_API_KEY="AIzaSy..."
 # Web search for Sentinel validator (optional, DDG is the keyless fallback)
 BRAVE_API_KEY="..."
 
-# Override local SQLite path. Default: sysqlow.db in cwd.
+# Override local SQLite path. Default: sysqlow.db in cwd. Ignored when
+# SYSQLOW_DB_REMOTE_ONLY=1 (no local file is created in that mode).
 LOCAL_DB_PATH="data/sysqlow.db"
+
+# Direct-to-Turso mode (no local SQLite file). Required for ephemeral-disk
+# hosts like Render free or Fly machines without volumes. Boot fails loud if
+# TURSO_DATABASE_URL/TURSO_AUTH_TOKEN are missing, preventing a silent
+# fall-back to ephemeral SQLite that would lose data on every restart.
+# See docs/deploying-to-render.md for the full walkthrough.
+SYSQLOW_DB_REMOTE_ONLY="1"
 
 # Transport. Default: stdio. Set to "sse" for HTTP/SSE + dashboard mode.
 MCP_TRANSPORT="sse"
 PORT="50741"
 ```
 
-Full reference: see [CLAUDE.md](../CLAUDE.md#environment-variables).
+Full reference: see [CLAUDE.md](../CLAUDE.md#environment-variables) and [`.env.example`](../.env.example) for an annotated template covering all three DB modes.
 
 ### How to get each value
 

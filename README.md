@@ -20,7 +20,7 @@
 ## 🛠️ Architecture Stack & Features
 
 - **Project Metadata Scanning:** Direct local file system scanning detects core technology stacks, specific framework versions, and project architecture signature configuration files (e.g., `package.json`, `composer.json`, `Cargo.toml`, etc.).
-- **Local-First Embedded Replica (Turso):** Microsecond read latencies on your local Mac using a local SQLite replica (`data/sysqlow.db`), automatically pushing database writes and schema creations up to the **Turso Cloud** primary.
+- **Local-First Embedded Replica (Turso):** Microsecond read latencies on your local Mac using a local SQLite replica (`data/sysqlow.db`), automatically pushing database writes and schema creations up to the **Turso Cloud** primary. For ephemeral-disk hosts (Render free, Fly without volumes), opt into direct-to-Turso mode via `SYSQLOW_DB_REMOTE_ONLY=1` — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md).
 - **Robust Wildcard Search Index:** Equipped with a dual-transport search engine. If a client LLM requests a broad scan (`*`), the engine gracefully intercepts the query to list all items; specific keyword queries use an integrated **FTS5 (Full-Text Search)** virtual index or fall back to SQL `LIKE` patterns.
 - **The "Sentinel" Validation Engine:** Connects to the **Google Gemini API** (or OpenAI) to verify the accuracy of technical notes against modern documentation retrieved via Brave Search or keyless DuckDuckGo fetching.
 - **Lookbehind JSON Repair Engine:** A custom-built, regex-driven parser (`/(?<!\\)\\(?!["\\/bfnrtu])/g`) automatically sanitizes double-backslashes in LLM JSON responses (such as PHP namespaces `Illuminate\Support`), guaranteeing robust serialization.
@@ -358,6 +358,12 @@ Simply execute the included bash script to clean, rebuild, and start the contain
 ```
 
 This binds port **`50741`** on your local machine to the container, directing database replica files securely to the mounted `data/` directory.
+
+> **☁️ Deploying to a remote host (Render, Fly, Railway)?**
+> See [`docs/deploying-to-render.md`](docs/deploying-to-render.md) for the
+> remote-only DB mode (`SYSQLOW_DB_REMOTE_ONLY=1`) that skips the local
+> SQLite cache — required for hosts with ephemeral disk. The repo also
+> ships a `render.yaml` Blueprint for one-click Render deploys.
 
 > [!WARNING]
 > **🔒 Security Checklist & Data Leak Prevention Audit (TODO):**
