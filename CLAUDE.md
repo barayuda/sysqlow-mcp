@@ -42,6 +42,7 @@ bun audit
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
+| `SYSQLOW_WORKSPACE_ROOTS` | Optional (Docker only) | Comma-separated list of extra host paths to bind-mount into the container (e.g. `~/Projects,~/work`). The default mount scope is the sysqlow-mcp checkout plus `$PWD` only — no `$HOME` exposure. Use this when you need the coherence engine to see workspaces outside those two paths. `~` is expanded, nested paths collapse to the shortest ancestor, non-existent entries are skipped with a warning. |
 
 > LLM budget caps (flash/embedding daily limits, daemon reserve, catch-up size) are stored in the `llm_budget_config` table and tuned at runtime via the `set_llm_budget` MCP tool — not via environment variables.
 
