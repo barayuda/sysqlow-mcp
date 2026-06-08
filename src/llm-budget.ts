@@ -51,22 +51,29 @@ export async function ensureBudgetSchema(db: Client = defaultClient): Promise<vo
   const colInfo = await db.execute("PRAGMA table_info(llm_quota_log)");
   const hasProvider = colInfo.rows.some((r: any) => r.name === "provider");
   if (!hasProvider) {
-    await db.execute("ALTER TABLE llm_quota_log RENAME TO llm_quota_log_old");
-    await db.execute(`
-      CREATE TABLE llm_quota_log (
-        date      TEXT NOT NULL,
-        provider  TEXT NOT NULL DEFAULT 'gemini',
-        model     TEXT NOT NULL,
-        count     INTEGER NOT NULL DEFAULT 0,
-        exhausted INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (date, provider, model)
-      )
-    `);
-    await db.execute(`
-      INSERT INTO llm_quota_log (date, provider, model, count, exhausted)
-      SELECT date, 'gemini', model, count, exhausted FROM llm_quota_log_old
-    `);
-    await db.execute("DROP TABLE llm_quota_log_old");
+    await db.execute("BEGIN IMMEDIATE");
+    try {
+      await db.execute("ALTER TABLE llm_quota_log RENAME TO llm_quota_log_old");
+      await db.execute(`
+        CREATE TABLE llm_quota_log (
+          date      TEXT NOT NULL,
+          provider  TEXT NOT NULL DEFAULT 'gemini',
+          model     TEXT NOT NULL,
+          count     INTEGER NOT NULL DEFAULT 0,
+          exhausted INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (date, provider, model)
+        )
+      `);
+      await db.execute(`
+        INSERT INTO llm_quota_log (date, provider, model, count, exhausted)
+        SELECT date, 'gemini', model, count, exhausted FROM llm_quota_log_old
+      `);
+      await db.execute("DROP TABLE llm_quota_log_old");
+      await db.execute("COMMIT");
+    } catch (err) {
+      await db.execute("ROLLBACK");
+      throw err;
+    }
   }
 }
 

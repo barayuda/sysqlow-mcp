@@ -225,5 +225,10 @@ describe("provider-aware quota log migration", () => {
     expect(rows.rows).toHaveLength(2);
     expect(rows.rows[0].provider).toBe("gemini");
     expect(rows.rows[1].provider).toBe("openrouter");
+
+    // Bug-trap: if canSpend's WHERE clause ignored the provider column,
+    // the 1 openrouter record above would count toward gemini's daily cap.
+    const canSpendGemini = await canSpend("gemini-2.5-flash", "interactive", NOW, db);
+    expect(canSpendGemini).toBe(true);
   });
 });
