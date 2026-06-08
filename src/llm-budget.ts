@@ -6,7 +6,11 @@ export type Caller = "interactive" | "daemon";
 export type Provider = "gemini" | "openrouter";
 
 export class QuotaExhaustedError extends Error {
-  constructor(public model: GeminiModel, public retryAfterMs: number | null) {
+  constructor(
+    public model: GeminiModel,
+    public retryAfterMs: number | null,
+    public isDaily: boolean = true,
+  ) {
     super(`Gemini quota exhausted for model ${model}`);
     this.name = "QuotaExhaustedError";
   }

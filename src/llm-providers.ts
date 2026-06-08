@@ -77,6 +77,11 @@ export async function routeWithFallback<T>(
     return await primary();
   } catch (err: any) {
     if (err?.name !== "QuotaExhaustedError") throw err;
+    // ADR-0002: fallback only engages on a true *daily* exhaustion. RPM-429
+    // throttles share the same error class but set isDaily=false; they should
+    // propagate so the caller's retry loop handles them, not burn OpenRouter
+    // budget.
+    if (err?.isDaily !== true) throw err;
     const fallbackEnabled = (process.env.SYSQLOW_FALLBACK_ENABLED ?? "true").toLowerCase() !== "false";
     if (!fallbackEnabled || !process.env.OPENROUTER_API_KEY) throw err;
     console.error(`[LLM Fallback] Gemini daily quota exhausted; routing to OpenRouter.`);

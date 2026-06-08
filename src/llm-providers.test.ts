@@ -117,4 +117,22 @@ describe("routeWithFallback", () => {
       "test",
     )).rejects.toThrow("Gemini quota exhausted");
   });
+
+  test("propagates QuotaExhaustedError when isDaily=false (RPM throttle)", async () => {
+    process.env.OPENROUTER_API_KEY = "or-test";
+    let openrouterCalled = false;
+    globalThis.fetch = (async () => {
+      openrouterCalled = true;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const { routeWithFallback } = await import("./llm-providers");
+    // ADR-0002 contract: RPM-429 (isDaily=false) must NOT engage the fallback.
+    await expect(routeWithFallback(
+      async () => { throw new QuotaExhaustedError("gemini-2.5-flash", 30_000, false); },
+      "daemon",
+      "test",
+    )).rejects.toThrow("Gemini quota exhausted");
+    expect(openrouterCalled).toBe(false);
+  });
 });

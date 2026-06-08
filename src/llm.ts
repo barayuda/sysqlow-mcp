@@ -173,10 +173,10 @@ async function runGeminiJSONGeneric<T>(
       console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
       await new Promise((r) => setTimeout(r, sleepMs));
       res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs, false);
     } else {
       console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
-      throw new QuotaExhaustedError(model, null);
+      throw new QuotaExhaustedError(model, null, false);
     }
   }
 
@@ -324,10 +324,10 @@ async function embedGemini(text: string, apiKey: string, caller: Caller = "inter
       console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
       await new Promise((r) => setTimeout(r, sleepMs));
       res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs, false);
     } else {
       console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
-      throw new QuotaExhaustedError(model, null);
+      throw new QuotaExhaustedError(model, null, false);
     }
   }
 
