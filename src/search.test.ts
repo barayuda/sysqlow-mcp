@@ -41,3 +41,32 @@ describe("searchSearXNG (via webSearch)", () => {
     expect(results[0]).toEqual({ title: "Doc A", url: "https://a.example", snippet: "snippet A" });
   });
 });
+
+describe("DDG fallback opt-out", () => {
+  test("returns empty when no provider configured and SYSQLOW_DDG_FALLBACK=false", async () => {
+    process.env.SYSQLOW_DDG_FALLBACK = "false";
+    // No TAVILY_API_KEY, no SEARXNG_URL, DDG disabled
+    let fetchCalled = false;
+    mockFetch(async () => {
+      fetchCalled = true;
+      return new Response("should not be called", { status: 200 });
+    });
+
+    const { webSearch } = await import("./search");
+    const results = await webSearch("anything");
+    expect(results).toEqual([]);
+    expect(fetchCalled).toBe(false);
+  });
+
+  test("DDG fires when SYSQLOW_DDG_FALLBACK is unset (default true)", async () => {
+    let lastUrl = "";
+    mockFetch(async (url) => {
+      lastUrl = url;
+      return new Response("<html><body>no results blocks here</body></html>", { status: 200 });
+    });
+
+    const { webSearch } = await import("./search");
+    await webSearch("test");
+    expect(lastUrl).toContain("html.duckduckgo.com");
+  });
+});

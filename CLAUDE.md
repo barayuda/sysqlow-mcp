@@ -39,6 +39,8 @@ bun audit
 | `SYSQLOW_DB_REMOTE_ONLY` | Optional | Set to `1` to connect directly to Turso with no local SQLite file. Required for ephemeral-disk hosts (Render free, Fly machines without volumes). Fails loud at boot if `TURSO_DATABASE_URL` (libsql/https) or `TURSO_AUTH_TOKEN` is missing. Tradeoff: every read is a network round-trip — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md). |
 | `GEMINI_API_KEY` | Required for LLM features | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`). The only supported LLM provider (Gemini-only, per ADR-0001). |
 | `TAVILY_API_KEY` | Optional | Web search for Sentinel via [Tavily](https://tavily.com) (free tier: 1,000 searches/month, no card). Falls back to DuckDuckGo HTML scraper if absent — note the DDG scraper is often blocked from Docker/data-center egress IPs. |
+| `SEARXNG_URL` | Optional | Self-hosted SearXNG instance URL (tier-3 search fallback). No quota, no key — most durable choice for Docker deployments. |
+| `SYSQLOW_DDG_FALLBACK` | Optional | Default `true`. Set to `false` to disable the last-resort DDG-HTML scraper — recommended for hosts whose egress IP is blocked by DDG. |
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
