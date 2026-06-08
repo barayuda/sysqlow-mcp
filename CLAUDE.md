@@ -38,7 +38,7 @@ bun audit
 | `TURSO_AUTH_TOKEN` | If Turso URL set | Auth token for Turso cloud |
 | `SYSQLOW_DB_REMOTE_ONLY` | Optional | Set to `1` to connect directly to Turso with no local SQLite file. Required for ephemeral-disk hosts (Render free, Fly machines without volumes). Fails loud at boot if `TURSO_DATABASE_URL` (libsql/https) or `TURSO_AUTH_TOKEN` is missing. Tradeoff: every read is a network round-trip — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md). |
 | `GEMINI_API_KEY` | Required for LLM features | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`). The only supported LLM provider (Gemini-only, per ADR-0001). |
-| `BRAVE_API_KEY` | Optional | Web search for Sentinel; falls back to DuckDuckGo HTML scraper if absent |
+| `TAVILY_API_KEY` | Optional | Web search for Sentinel via [Tavily](https://tavily.com) (free tier: 1,000 searches/month, no card). Falls back to DuckDuckGo HTML scraper if absent — note the DDG scraper is often blocked from Docker/data-center egress IPs. |
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
@@ -59,14 +59,14 @@ The server has two distinct runtime personalities, controlled by `MCP_TRANSPORT`
 
 | File | Role |
 |---|---|
-| `src/index.ts` | Entry point. Defines all 11 FastMCP tools, Hono HTTP routes, auto-hook on client `connect`, background Sentinel cron, and the console log ring buffer for the dashboard. |
-| `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup. |
-| `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. |
+| `src/index.ts` | Entry point. Defines all 17 FastMCP tools, Hono HTTP routes (`/api/graph`, `/api/validate/:id`, `/api/logs`, `/api/env`, `/api/budget`, `/api/outdated`), auto-hook on client `connect`, background Sentinel cron, and the console log ring buffer for the dashboard. |
+| `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup (parent_id, project_id, embeddings table, projects, knowledge_relations + isolation trigger, llm_quota_log, `last_validation_reasoning` + `last_suggested_diff` columns). |
+| `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. Persists LLM reasoning + suggested diff on outdated/incorrect verdicts; clears them on `up_to_date` recovery so `list_outdated_knowledge` always reflects the latest state. |
 | `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini-only (ADR-0001); throws if GEMINI_API_KEY is unset. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
-| `src/search.ts` | `webSearch()` (Brave → DuckDuckGo HTML scraper fallback) and `cosineSimilarity()` (in-process vector math). |
+| `src/search.ts` | `webSearch()` (Tavily → DuckDuckGo HTML scraper fallback; configurable via `TAVILY_API_KEY`) and `cosineSimilarity()` (in-process vector math). |
 | `src/learn.ts` | `learnCodebase(path)` — scans project root for config/manifest files, collects content, calls `analyzeCodebaseWithLLM`, stores results as "Project Context" snippets. |
 | `src/dashboard-html.ts` | Single large string export: the full HTML/JS for the Vis.js knowledge graph dashboard. |
-| `schema.sql` | SQLite DDL imported via `with { type: "text" }` at build time. Defines `technical_knowledge`, FTS5 virtual table `technical_knowledge_fts`, three sync triggers, and `technical_knowledge_embeddings`. |
+| `schema.sql` | SQLite DDL imported via `with { type: "text" }` at build time. Defines `technical_knowledge` (with `last_validation_reasoning` + `last_suggested_diff` columns for daemon-marked outdated triage), FTS5 virtual table `technical_knowledge_fts`, three sync triggers, `technical_knowledge_embeddings`, `projects`, and `knowledge_relations` (with `enforce_relation_isolation` trigger). |
 
 ### Database
 
@@ -86,6 +86,16 @@ When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded r
 2. SQL `LIKE` on topic/content/category
 3. (semantic only) Cosine similarity on `technical_knowledge_embeddings`
 4. (semantic only) Falls back to FTS5/LIKE if embedding generation fails
+
+### Sentinel triage
+
+Every `validateKnowledgeItem` call persists the LLM's `reasoning` and `suggested_diff` to the `last_validation_reasoning` and `last_suggested_diff` columns. On `up_to_date` verdicts both are NULLed (so a recovered row doesn't carry stale advice forever). Daemon-driven and interactive validations are symmetric in this — the LLM's cognitive output never silently dies in a log line again.
+
+Surface the backlog via:
+- **MCP:** `list_outdated_knowledge { limit?, projectId? }` → `{ count, items: [{ id, topic, reasoning, suggested_diff, source_url, confidence_score, last_validated_at }] }`
+- **HTTP (SSE mode):** `GET /api/outdated?limit=20&project_id=<uuid>` → same shape
+
+A snippet with `is_validated=0 AND last_validated_at IS NOT NULL` was *checked and rejected* by the validator; `is_validated=0 AND last_validated_at IS NULL` is "never checked yet" (different state, different action).
 
 ### LLM JSON repair
 

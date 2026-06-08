@@ -9,11 +9,14 @@ CREATE TABLE IF NOT EXISTS technical_knowledge (
     last_validated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     source_url TEXT,               -- The URL used for validation
     confidence_score INTEGER DEFAULT 0, -- 1-10 rating
+    last_validation_reasoning TEXT,    -- LLM's verdict explanation (null when never validated or up_to_date)
+    last_suggested_diff TEXT,          -- Git-style unified diff proposed by the LLM when status was outdated/incorrect
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 -- NOTE: column `project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`
 -- is added by auto-migration in src/db.ts so it lands on pre-existing databases too.
--- New databases pick it up via the same migration on first init.
+-- The last_validation_reasoning + last_suggested_diff columns are also added by
+-- auto-migration for the same reason (pre-existing DBs predate them).
 
 -- Full Text Search virtual table for search fallback
 CREATE VIRTUAL TABLE IF NOT EXISTS technical_knowledge_fts USING fts5(

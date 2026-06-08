@@ -22,7 +22,7 @@
 - **Project Metadata Scanning:** Direct local file system scanning detects core technology stacks, specific framework versions, and project architecture signature configuration files (e.g., `package.json`, `composer.json`, `Cargo.toml`, etc.).
 - **Local-First Embedded Replica (Turso):** Microsecond read latencies on your local Mac using a local SQLite replica (`data/sysqlow.db`), automatically pushing database writes and schema creations up to the **Turso Cloud** primary. For ephemeral-disk hosts (Render free, Fly without volumes), opt into direct-to-Turso mode via `SYSQLOW_DB_REMOTE_ONLY=1` — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md).
 - **Robust Wildcard Search Index:** Equipped with a dual-transport search engine. If a client LLM requests a broad scan (`*`), the engine gracefully intercepts the query to list all items; specific keyword queries use an integrated **FTS5 (Full-Text Search)** virtual index or fall back to SQL `LIKE` patterns.
-- **The "Sentinel" Validation Engine:** Connects to the **Google Gemini API** (or OpenAI) to verify the accuracy of technical notes against modern documentation retrieved via Brave Search or keyless DuckDuckGo fetching.
+- **The "Sentinel" Validation Engine:** Connects to the **Google Gemini API** to verify the accuracy of technical notes against modern documentation retrieved via Tavily Search or keyless DuckDuckGo fetching.
 - **Lookbehind JSON Repair Engine:** A custom-built, regex-driven parser (`/(?<!\\)\\(?!["\\/bfnrtu])/g`) automatically sanitizes double-backslashes in LLM JSON responses (such as PHP namespaces `Illuminate\Support`), guaranteeing robust serialization.
 
 ```mermaid
@@ -32,8 +32,8 @@ graph TD
     C <-->|Bi-directional Sync| D[(Turso Cloud DB)]
     B <-->|learn_codebase| H[Local Workspace Configs & README]
     B <-->|validate_knowledge| E[Sentinel Engine]
-    E -->|1. Web Search| F[Brave/DuckDuckGo API]
-    E -->|2. Reasoning| G[Gemini/OpenAI API]
+    E -->|1. Web Search| F[Tavily/DuckDuckGo API]
+    E -->|2. Reasoning| G[Gemini API]
     G -->|3. Structured Report| E
     B <-->|commit_update| C
 ```
@@ -120,7 +120,7 @@ Searches your knowledge base to retrieve technical snippets using keyword matchi
 ---
 
 ### 4. `validate_knowledge`
-Triggers the **Sentinel validation engine** to audit a stored snippet's accuracy. It searches live documentation and compares it to your saved code, returning a validation status, a detailed reason, and a suggested code diff. **It is read-only and never auto-writes to the database for safety.**
+Triggers the **Sentinel validation engine** to audit a stored snippet's accuracy. It searches live documentation (Tavily → DuckDuckGo) and compares it to your saved code, returning a validation status, a detailed reason, and a suggested code diff. **The snippet content itself is never auto-rewritten — but the reasoning and suggested diff are persisted to `last_validation_reasoning` and `last_suggested_diff` so you can triage them later via `list_outdated_knowledge` without re-spending another Gemini call.**
 
 * **Parameters:**
   * `id` (string, required): The UUID of the snippet to validate.
@@ -206,6 +206,35 @@ Scrapes external HTML documentation, converts the sanitized text stream into a s
 
 ---
 
+### 9. `list_outdated_knowledge`
+Lists snippets the Sentinel validator (interactive or daemon) could not confirm as up-to-date — outdated, incorrect, or unverifiable (no search evidence). Each item carries the reasoning and suggested diff persisted from the last validation pass, so a human or LLM client can triage what the daemon found overnight without burning another Gemini call.
+
+* **Parameters:**
+  * `limit` (number, optional): Max snippets to return (default `50`, max `200`).
+  * `projectId` (string, optional): Restrict to a specific project's snippets.
+* **How to use it:**
+  > *"Show me what the Sentinel daemon flagged as outdated yesterday."*
+* **What it returns:**
+  ```json
+  {
+    "count": 1,
+    "items": [{
+      "id": "a5b3276c-1023-451d-b676-d9a785df0f6a",
+      "topic": "Laravel 9 Rate Limiting",
+      "category": "Backend",
+      "last_validated_at": "2026-06-08 14:22:01",
+      "confidence_score": 7,
+      "source_url": "https://laravel.com/docs/11.x/rate-limiting",
+      "reasoning": "The stored snippet uses RouteServiceProvider which was removed in Laravel 11...",
+      "suggested_diff": "--- old\n+++ new\n@@ ..."
+    }]
+  }
+  ```
+
+**Equivalent REST endpoint (SSE mode):** `GET /api/outdated?limit=20&project_id=<uuid>` returns the same shape.
+
+---
+
 ## ✍️ Prompt Aliases And Ready Prompt Pack
 
 Use intent-style prompts so your assistant can trigger SysQlow automatically even when you do not mention the server name.
@@ -216,6 +245,7 @@ Use intent-style prompts so your assistant can trigger SysQlow automatically eve
 - **Search / Find** = `recall_knowledge` / `knowledge_workflow(intent=search)`
 - **Audit / Validate** = `validate_knowledge` / `knowledge_workflow(intent=validate)`
 - **Apply** = `commit_update` / `knowledge_workflow(intent=apply)`
+- **Triage** = `list_outdated_knowledge` — show what the validator flagged but didn't auto-fix
 
 ### Copy-paste prompt pack
 1. Analyze my current workspace and save project context for later answers.
@@ -252,7 +282,7 @@ Create a `.env` file in the root of the project:
 TURSO_DATABASE_URL="libsql://your-db-url.turso.io"
 TURSO_AUTH_TOKEN="your-turso-jwt-token"
 GEMINI_API_KEY="AIzaSy..." # Enables validation reasoning
-BRAVE_API_KEY="your-brave-key" # Optional (falls back to DDG scraper)
+TAVILY_API_KEY="tvly-..." # Optional (1k free/month at tavily.com; falls back to DDG scraper)
 ```
 
 ---
@@ -278,7 +308,7 @@ Great for local testing. The MCP client (e.g., Cursor, Claude Desktop) launches 
            "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
            "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
            "GEMINI_API_KEY": "your-gemini-key",
-           "BRAVE_API_KEY": "your-brave-key"
+           "TAVILY_API_KEY": "tvly-..."
          }
        }
      }
@@ -338,7 +368,7 @@ To run the server in the background natively to access the **Interactive Web Gra
             "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
             "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
             "GEMINI_API_KEY": "your-gemini-key",
-            "BRAVE_API_KEY": "your-brave-key"
+            "TAVILY_API_KEY": "tvly-..."
           }
         },
       }
@@ -399,7 +429,7 @@ This binds port **`50741`** on your local machine to the container, directing da
 >
 > **Other hardening tips that still apply:**
 > * **Minimize secret injection.** Only `TURSO_*`, `GEMINI_API_KEY`,
->   `BRAVE_API_KEY`, `MCP_TRANSPORT`, `PORT`, and `SYSQLOW_WORKSPACE_DIR`
+>   `TAVILY_API_KEY`, `MCP_TRANSPORT`, `PORT`, and `SYSQLOW_WORKSPACE_DIR`
 >   are passed into the container by default — review `run-docker.sh`
 >   before adding more.
 > * **Dashboard is not authenticated.** The `/` dashboard and `/api/*`
@@ -473,7 +503,7 @@ To integrate **System Query Flow** as a developer companion in your workspace:
             "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
             "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
             "GEMINI_API_KEY": "your-gemini-key",
-            "BRAVE_API_KEY": "your-brave-key"
+            "TAVILY_API_KEY": "tvly-..."
           }
         },
       }
@@ -497,7 +527,7 @@ For clients that launch standard input/output (stdio) commands (such as Claude D
         "TURSO_DATABASE_URL": "libsql://your-db-url.turso.io",
         "TURSO_AUTH_TOKEN": "your-turso-jwt-token",
         "GEMINI_API_KEY": "<your-gemini-key>",
-        "BRAVE_API_KEY": "<optional-brave-key>"
+        "TAVILY_API_KEY": "<optional-tavily-key>"
       }
     }
   }

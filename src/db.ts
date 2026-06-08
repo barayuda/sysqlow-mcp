@@ -185,6 +185,17 @@ export async function initDatabase() {
       // Column already exists, ignore error
     }
 
+    // Auto-migration: persisted Sentinel verdict — reasoning + suggested diff.
+    // Without these, daemon-marked outdated snippets are invisible to triage tools.
+    try {
+      await client.execute("ALTER TABLE technical_knowledge ADD COLUMN last_validation_reasoning TEXT");
+      console.error("[DB Migration] Added last_validation_reasoning column to technical_knowledge.");
+    } catch (_) { /* already exists */ }
+    try {
+      await client.execute("ALTER TABLE technical_knowledge ADD COLUMN last_suggested_diff TEXT");
+      console.error("[DB Migration] Added last_suggested_diff column to technical_knowledge.");
+    } catch (_) { /* already exists */ }
+
     // Auto-migration: safely create embeddings table in existing databases if missing
     try {
       await client.execute(`

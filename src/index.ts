@@ -987,6 +987,49 @@ server.addTool({
   },
 });
 
+// Tool: list_outdated_knowledge
+// Surfaces snippets that the Sentinel daemon (or an interactive validate_knowledge call)
+// marked as outdated/incorrect. Returns the reasoning + suggested diff the LLM produced,
+// so a human or LLM client can triage without re-spending a Gemini call to re-derive them.
+server.addTool({
+  name: "list_outdated_knowledge",
+  description: "List snippets the Sentinel validator flagged as outdated or incorrect (is_validated=0 AND last_validated_at IS NOT NULL), with the LLM's reasoning and suggested diff persisted from the last validation pass. Useful for triaging what the daemon found overnight.",
+  parameters: z.object({
+    limit: z.number().int().min(1).max(200).default(50).describe("Max snippets to return (default 50, max 200)."),
+    projectId: z.string().optional().describe("If set, restrict to snippets belonging to this project."),
+  }),
+  execute: async ({ limit, projectId }) => {
+    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const args: any[] = [];
+    if (projectId) {
+      filters.push("project_id = ?");
+      args.push(projectId);
+    }
+    args.push(limit);
+    const sql = `
+      SELECT id, topic, category, project_id, source_url, confidence_score,
+             last_validated_at, last_validation_reasoning, last_suggested_diff
+      FROM technical_knowledge
+      WHERE ${filters.join(" AND ")}
+      ORDER BY last_validated_at DESC
+      LIMIT ?
+    `;
+    const res = await client.execute({ sql, args });
+    const items = res.rows.map((r: any) => ({
+      id: r.id,
+      topic: r.topic,
+      category: r.category,
+      project_id: r.project_id,
+      source_url: r.source_url || null,
+      confidence_score: r.confidence_score,
+      last_validated_at: r.last_validated_at,
+      reasoning: r.last_validation_reasoning || null,
+      suggested_diff: r.last_suggested_diff || null,
+    }));
+    return JSON.stringify({ count: items.length, items }, null, 2);
+  },
+});
+
 // Tool 6: knowledge_workflow
 server.addTool({
   name: "knowledge_workflow",
@@ -1749,6 +1792,47 @@ app.get("/api/budget", async (c) => {
   try {
     const snapshot = await getBudgetSnapshot();
     return c.json({ budget: snapshot });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
+});
+
+// Snippets the Sentinel validator flagged as outdated/incorrect, with reasoning + diff.
+// Mirrors the list_outdated_knowledge MCP tool for HTTP/dashboard consumers.
+app.get("/api/outdated", async (c) => {
+  try {
+    const limitParam = parseInt(c.req.query("limit") || "50", 10);
+    const limit = Math.min(200, Math.max(1, isNaN(limitParam) ? 50 : limitParam));
+    const projectId = c.req.query("project_id");
+
+    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const args: any[] = [];
+    if (projectId) {
+      filters.push("project_id = ?");
+      args.push(projectId);
+    }
+    args.push(limit);
+    const res = await client.execute({
+      sql: `SELECT id, topic, category, project_id, source_url, confidence_score,
+                   last_validated_at, last_validation_reasoning, last_suggested_diff
+            FROM technical_knowledge
+            WHERE ${filters.join(" AND ")}
+            ORDER BY last_validated_at DESC
+            LIMIT ?`,
+      args,
+    });
+    const items = res.rows.map((r: any) => ({
+      id: r.id,
+      topic: r.topic,
+      category: r.category,
+      project_id: r.project_id,
+      source_url: r.source_url || null,
+      confidence_score: r.confidence_score,
+      last_validated_at: r.last_validated_at,
+      reasoning: r.last_validation_reasoning || null,
+      suggested_diff: r.last_suggested_diff || null,
+    }));
+    return c.json({ count: items.length, items });
   } catch (err: any) {
     return c.json({ status: "error", message: err.message }, 500);
   }

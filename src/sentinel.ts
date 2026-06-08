@@ -42,15 +42,29 @@ export async function validateKnowledgeItem(
   
   // 5. Update validation metadata in DB
   // We set is_validated to true only if the LLM states it is completely "up_to_date".
+  // For up_to_date snippets we clear any prior reasoning/diff (they no longer apply);
+  // for outdated/incorrect we persist them so list_outdated_knowledge can surface
+  // *what* needs fixing without forcing a re-validation (which would cost another Gemini call).
   const isValidated = report.status === "up_to_date" ? 1 : 0;
+  const persistedReasoning = report.status === "up_to_date" ? null : report.reasoning;
+  const persistedDiff = report.status === "up_to_date" ? null : report.suggested_diff;
   await client.execute({
-    sql: `UPDATE technical_knowledge 
-          SET is_validated = ?, 
-              last_validated_at = CURRENT_TIMESTAMP, 
-              source_url = ?, 
-              confidence_score = ? 
+    sql: `UPDATE technical_knowledge
+          SET is_validated = ?,
+              last_validated_at = CURRENT_TIMESTAMP,
+              source_url = ?,
+              confidence_score = ?,
+              last_validation_reasoning = ?,
+              last_suggested_diff = ?
           WHERE id = ?`,
-    args: [isValidated, report.source_url || "", report.confidence_score, id]
+    args: [
+      isValidated,
+      report.source_url || "",
+      report.confidence_score,
+      persistedReasoning,
+      persistedDiff,
+      id,
+    ],
   });
   
   console.error(`Validation complete for ID "${id}". Status: ${report.status}`);
