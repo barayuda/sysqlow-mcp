@@ -3,6 +3,7 @@ import type { Client } from "@libsql/client";
 
 export type GeminiModel = "gemini-2.5-flash" | "gemini-embedding-001";
 export type Caller = "interactive" | "daemon";
+export type Provider = "gemini" | "openrouter";
 
 export class QuotaExhaustedError extends Error {
   constructor(public model: GeminiModel, public retryAfterMs: number | null) {
@@ -19,16 +20,7 @@ const DEFAULT_CONFIG: Record<string, number> = {
 };
 
 export async function ensureBudgetSchema(db: Client = defaultClient): Promise<void> {
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS llm_quota_log (
-      date      TEXT NOT NULL,
-      model     TEXT NOT NULL,
-      count     INTEGER NOT NULL DEFAULT 0,
-      -- 1 = daily cap reached for this Pacific date; resets automatically when tomorrow's row is read
-      exhausted INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (date, model)
-    )
-  `);
+  // 1. Config table (unchanged).
   await db.execute(`
     CREATE TABLE IF NOT EXISTS llm_budget_config (
       key   TEXT PRIMARY KEY,
@@ -40,6 +32,41 @@ export async function ensureBudgetSchema(db: Client = defaultClient): Promise<vo
       sql: `INSERT OR IGNORE INTO llm_budget_config (key, value) VALUES (?, ?)`,
       args: [key, value],
     });
+  }
+
+  // 2. Create the quota log table with the new shape if it doesn't exist.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS llm_quota_log (
+      date      TEXT NOT NULL,
+      provider  TEXT NOT NULL DEFAULT 'gemini',
+      model     TEXT NOT NULL,
+      count     INTEGER NOT NULL DEFAULT 0,
+      exhausted INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (date, provider, model)
+    )
+  `);
+
+  // 3. Migration: pre-existing databases have (date, model) as the PK and no
+  //    provider column. Detect via PRAGMA and rebuild.
+  const colInfo = await db.execute("PRAGMA table_info(llm_quota_log)");
+  const hasProvider = colInfo.rows.some((r: any) => r.name === "provider");
+  if (!hasProvider) {
+    await db.execute("ALTER TABLE llm_quota_log RENAME TO llm_quota_log_old");
+    await db.execute(`
+      CREATE TABLE llm_quota_log (
+        date      TEXT NOT NULL,
+        provider  TEXT NOT NULL DEFAULT 'gemini',
+        model     TEXT NOT NULL,
+        count     INTEGER NOT NULL DEFAULT 0,
+        exhausted INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (date, provider, model)
+      )
+    `);
+    await db.execute(`
+      INSERT INTO llm_quota_log (date, provider, model, count, exhausted)
+      SELECT date, 'gemini', model, count, exhausted FROM llm_quota_log_old
+    `);
+    await db.execute("DROP TABLE llm_quota_log_old");
   }
 }
 
@@ -73,13 +100,14 @@ async function ceilingFor(model: GeminiModel, caller: Caller, db: Client): Promi
 }
 
 async function readRow(
-  model: GeminiModel,
+  model: string,
+  provider: Provider,
   now: Date,
   db: Client,
 ): Promise<{ count: number; exhausted: boolean }> {
   const res = await db.execute({
-    sql: `SELECT count, exhausted FROM llm_quota_log WHERE date = ? AND model = ?`,
-    args: [pacificDate(now), model],
+    sql: `SELECT count, exhausted FROM llm_quota_log WHERE date = ? AND provider = ? AND model = ?`,
+    args: [pacificDate(now), provider, model],
   });
   if (res.rows.length === 0) return { count: 0, exhausted: false };
   return { count: Number(res.rows[0].count), exhausted: Number(res.rows[0].exhausted) === 1 };
@@ -90,34 +118,40 @@ export async function canSpend(
   caller: Caller,
   now: Date = new Date(),
   db: Client = defaultClient,
+  provider: Provider = "gemini",
 ): Promise<boolean> {
-  const { count, exhausted } = await readRow(model, now, db);
+  // canSpend stays gemini-typed for now — Task B4 will generalize it.
+  // The provider param exists so callers can be explicit; default keeps
+  // existing behavior unchanged.
+  const { count, exhausted } = await readRow(model, provider, now, db);
   if (exhausted) return false;
   const ceiling = await ceilingFor(model, caller, db);
   return count < ceiling;
 }
 
 export async function record(
-  model: GeminiModel,
+  model: string,
+  provider: Provider = "gemini",
   now: Date = new Date(),
   db: Client = defaultClient,
 ): Promise<void> {
   await db.execute({
-    sql: `INSERT INTO llm_quota_log (date, model, count) VALUES (?, ?, 1)
-          ON CONFLICT(date, model) DO UPDATE SET count = count + 1`,
-    args: [pacificDate(now), model],
+    sql: `INSERT INTO llm_quota_log (date, provider, model, count) VALUES (?, ?, ?, 1)
+          ON CONFLICT(date, provider, model) DO UPDATE SET count = count + 1`,
+    args: [pacificDate(now), provider, model],
   });
 }
 
 export async function markExhausted(
-  model: GeminiModel,
+  model: string,
+  provider: Provider = "gemini",
   now: Date = new Date(),
   db: Client = defaultClient,
 ): Promise<void> {
   await db.execute({
-    sql: `INSERT INTO llm_quota_log (date, model, count, exhausted) VALUES (?, ?, 0, 1)
-          ON CONFLICT(date, model) DO UPDATE SET exhausted = 1`,
-    args: [pacificDate(now), model],
+    sql: `INSERT INTO llm_quota_log (date, provider, model, count, exhausted) VALUES (?, ?, ?, 0, 1)
+          ON CONFLICT(date, provider, model) DO UPDATE SET exhausted = 1`,
+    args: [pacificDate(now), provider, model],
   });
 }
 
@@ -173,7 +207,7 @@ export async function getBudgetSnapshot(
   const models: GeminiModel[] = ["gemini-2.5-flash", "gemini-embedding-001"];
   const out: BudgetStatus[] = [];
   for (const model of models) {
-    const { count, exhausted } = await readRow(model, now, db);
+    const { count, exhausted } = await readRow(model, "gemini", now, db);
     const limit = await getConfig(limitKey(model), db);
     const daemonReserve =
       model === "gemini-2.5-flash" ? await getConfig("flash_daemon_reserve", db) : 0;
