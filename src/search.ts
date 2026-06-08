@@ -11,12 +11,28 @@ export async function webSearch(query: string): Promise<SearchResult[]> {
     try {
       return await searchTavily(query, tavilyKey);
     } catch (e) {
-      console.error("Tavily Search failed, falling back to DuckDuckGo scraper:", e);
+      console.error("Tavily Search failed, trying next tier:", e);
     }
   }
 
-  console.error(`Using DuckDuckGo fallback scraper for query: "${query}"`);
-  return await searchDuckDuckGo(query);
+  const searxngUrl = process.env.SEARXNG_URL;
+  if (searxngUrl) {
+    console.error(`Using SearXNG instance for query: "${query}"`);
+    try {
+      return await searchSearXNG(query, searxngUrl);
+    } catch (e) {
+      console.error("SearXNG failed, trying next tier:", e);
+    }
+  }
+
+  const ddgEnabled = (process.env.SYSQLOW_DDG_FALLBACK ?? "true").toLowerCase() !== "false";
+  if (ddgEnabled) {
+    console.error(`Using DuckDuckGo fallback scraper for query: "${query}"`);
+    return await searchDuckDuckGo(query);
+  }
+
+  console.error("All search providers exhausted; returning empty results.");
+  return [];
 }
 
 async function searchTavily(query: string, apiKey: string): Promise<SearchResult[]> {
@@ -43,6 +59,27 @@ async function searchTavily(query: string, apiKey: string): Promise<SearchResult
     title: r.title || "",
     url: r.url || "",
     snippet: r.content || ""
+  }));
+}
+
+async function searchSearXNG(query: string, baseUrl: string): Promise<SearchResult[]> {
+  const trimmed = baseUrl.replace(/\/+$/, "");
+  const params = new URLSearchParams({ q: query, format: "json", safesearch: "0" });
+  const url = `${trimmed}/search?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { "Accept": "application/json" },
+  });
+
+  if (!res.ok) {
+    throw new Error(`SearXNG request failed with status ${res.status}: ${await res.text()}`);
+  }
+
+  const data = await res.json() as any;
+  const results = (data.results || []).slice(0, 5);
+  return results.map((r: any) => ({
+    title: r.title || "",
+    url: r.url || "",
+    snippet: r.content || "",
   }));
 }
 
