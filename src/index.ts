@@ -993,7 +993,7 @@ server.addTool({
 // so a human or LLM client can triage without re-spending a Gemini call to re-derive them.
 server.addTool({
   name: "list_outdated_knowledge",
-  description: "List snippets the Sentinel validator flagged as outdated or incorrect (is_validated=0 AND last_validated_at IS NOT NULL), with the LLM's reasoning and suggested diff persisted from the last validation pass. Useful for triaging what the daemon found overnight.",
+  description: "List snippets the Sentinel validator could not confirm as up-to-date — outdated, incorrect, or unverifiable (no search evidence). Each item carries the reasoning persisted from the last validation pass and, when applicable, a suggested unified diff. Useful for triaging what the daemon found overnight.",
   parameters: z.object({
     limit: z.number().int().min(1).max(200).default(50).describe("Max snippets to return (default 50, max 200)."),
     projectId: z.string().optional().describe("If set, restrict to snippets belonging to this project."),

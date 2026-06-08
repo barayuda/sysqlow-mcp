@@ -1,7 +1,7 @@
 import { canSpend, record, markExhausted, parseRetryInfo, QuotaExhaustedError, type Caller } from "./llm-budget";
 
 export interface ValidationReport {
-  status: "up_to_date" | "outdated" | "incorrect";
+  status: "up_to_date" | "outdated" | "incorrect" | "unverifiable";
   reasoning: string;
   suggested_diff: string | null;
   source_url: string | null;
