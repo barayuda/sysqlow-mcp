@@ -127,6 +127,24 @@ Claude Desktop and other clients use the same URL with their own config shape.
   embedded-replica mode (`SYSQLOW_DB_REMOTE_ONLY` unset, add a 1 GB disk
   mounted at `/app/db`).
 
+## Optional: SearXNG sidecar for keyless search resilience
+
+If you'd rather not depend on a Tavily key (or want extra durability beyond
+their 1,000-search/month tier), you can run [SearXNG](https://searxng.github.io)
+as a sidecar service on Render itself.
+
+1. Create a second Render service from the public image `searxng/searxng:latest`.
+2. Set its internal hostname (e.g. `sysqlow-searxng`); leave the port at the
+   default `8080`.
+3. In your sysqlow-mcp service env vars, set:
+   `SEARXNG_URL=http://sysqlow-searxng:8080`
+4. (Recommended) Configure SearXNG's `settings.yml` to disable web UI access
+   and restrict JSON output to internal traffic only.
+
+The chain order is Tavily → SearXNG → DDG, so SearXNG only fires when Tavily
+isn't keyed or errors. Combined with `SYSQLOW_DDG_FALLBACK=false`, this gives
+you a fully-self-hosted search tier with no third-party quotas.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
