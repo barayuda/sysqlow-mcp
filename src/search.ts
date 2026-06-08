@@ -5,39 +5,44 @@ export interface SearchResult {
 }
 
 export async function webSearch(query: string): Promise<SearchResult[]> {
-  const braveKey = process.env.BRAVE_API_KEY;
-  if (braveKey) {
-    console.error(`Using Brave Search API for query: "${query}"`);
+  const tavilyKey = process.env.TAVILY_API_KEY;
+  if (tavilyKey) {
+    console.error(`Using Tavily Search API for query: "${query}"`);
     try {
-      return await searchBrave(query, braveKey);
+      return await searchTavily(query, tavilyKey);
     } catch (e) {
-      console.error("Brave Search failed, falling back to DuckDuckGo scraper:", e);
+      console.error("Tavily Search failed, falling back to DuckDuckGo scraper:", e);
     }
   }
-  
+
   console.error(`Using DuckDuckGo fallback scraper for query: "${query}"`);
   return await searchDuckDuckGo(query);
 }
 
-async function searchBrave(query: string, apiKey: string): Promise<SearchResult[]> {
-  const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`;
-  const res = await fetch(url, {
+async function searchTavily(query: string, apiKey: string): Promise<SearchResult[]> {
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
     headers: {
-      "X-Subscription-Token": apiKey,
-      "Accept": "application/json"
-    }
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      query,
+      max_results: 5,
+      search_depth: "basic"
+    })
   });
-  
+
   if (!res.ok) {
-    throw new Error(`Brave Search API failed with status ${res.status}: ${await res.text()}`);
+    throw new Error(`Tavily Search API failed with status ${res.status}: ${await res.text()}`);
   }
-  
+
   const data = await res.json() as any;
-  const webResults = data.web?.results || [];
-  return webResults.map((r: any) => ({
+  const results = data.results || [];
+  return results.map((r: any) => ({
     title: r.title || "",
     url: r.url || "",
-    snippet: r.description || ""
+    snippet: r.content || ""
   }));
 }
 

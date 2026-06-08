@@ -33,9 +33,10 @@ instead of a microsecond local read.
 - A [Render](https://render.com/) account.
 - A [Google AI Studio](https://aistudio.google.com/apikey) API key for Gemini
   (Sentinel validation + embeddings).
-- *(Optional)* A [Brave Search](https://api.search.brave.com/) API key. If
-  omitted, Sentinel falls back to scraping DuckDuckGo HTML — works but
-  lower quality and rate-limited.
+- *(Recommended)* A [Tavily](https://tavily.com) API key (free tier: 1,000
+  searches/month, no card). If omitted, Sentinel falls back to scraping
+  DuckDuckGo HTML — note that DDG frequently returns `ConnectionRefused`
+  from Render's egress IPs, effectively leaving Sentinel without web evidence.
 
 ## Deploy via Blueprint (recommended)
 
@@ -48,7 +49,7 @@ except secrets:
    - `TURSO_DATABASE_URL` — your `libsql://...` URL from Turso dashboard
    - `TURSO_AUTH_TOKEN` — token from `turso db tokens create <db>`
    - `GEMINI_API_KEY` — your AI Studio key
-   - `BRAVE_API_KEY` — *(optional)* your Brave Search key, or leave blank
+   - `TAVILY_API_KEY` — *(recommended)* your Tavily key, or leave blank to let Sentinel fall back to DDG (often blocked from Render IPs)
 4. Click **Apply**. Render builds the Docker image, sets
    `SYSQLOW_DB_REMOTE_ONLY=1` + `MCP_TRANSPORT=sse` automatically, and starts
    the service.
@@ -75,7 +76,7 @@ If you don't want to use the Blueprint:
    | `TURSO_DATABASE_URL` | `libsql://...` |
    | `TURSO_AUTH_TOKEN` | *(your token)* |
    | `GEMINI_API_KEY` | *(your key)* |
-   | `BRAVE_API_KEY` | *(optional)* |
+   | `TAVILY_API_KEY` | *(recommended)* |
 
    **Do not set `PORT`.** Render injects its own value and routes external
    traffic to whatever port the service binds. The app reads
