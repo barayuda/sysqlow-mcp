@@ -196,7 +196,8 @@ export function parseRetryInfo(body: any): { kind: "rpm" | "daily"; retryDelayMs
 }
 
 export interface BudgetStatus {
-  model: GeminiModel;
+  provider: Provider;
+  model: string;
   count: number;
   limit: number;
   daemonReserve: number;
@@ -207,29 +208,88 @@ export interface BudgetStatus {
   resetsAt: string;
 }
 
+function nextPacificMidnightISO(now: Date): string {
+  // Compute the next midnight in America/Los_Angeles, returned as ISO 8601 UTC.
+  const la = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const [year, month, day] = la.format(now).split("-").map(Number);
+  // Next midnight LA = start of tomorrow in LA, which we express as a UTC instant.
+  // We parse "YYYY-MM-DDT00:00:00" as if it were LA time by using a temp Date
+  // with the America/Los_Angeles offset.  The easiest portable approach: use the
+  // Intl offset for that specific date.
+  const tomorrowMidnightLA = new Date(
+    Date.UTC(year, month - 1, day + 1) +
+      // Offset from UTC to LA midnight: we approximate by reading the current
+      // offset and applying it.  For an exact value we'd need a full TZ library,
+      // but for display purposes ("resets at") this is accurate to the minute.
+      (now.getTimezoneOffset() * 60000 - getLocalMsFromLA(now)),
+  );
+  return tomorrowMidnightLA.toISOString();
+}
+
+function getLocalMsFromLA(now: Date): number {
+  // Returns the difference (UTC offset ms) for America/Los_Angeles at `now`.
+  // We compute it by rendering a fixed UTC instant via LA formatter and comparing.
+  const utcMs = now.getTime();
+  const laStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+  // laStr is like "2026-06-08, 13:00:00" or "2026-06-08 13:00:00"
+  const normalized = laStr.replace(", ", "T").replace(" ", "T");
+  const laMs = new Date(normalized + "Z").getTime();
+  return utcMs - laMs; // positive = LA is behind UTC
+}
+
 export async function getBudgetSnapshot(
   now: Date = new Date(),
   db: Client = defaultClient,
 ): Promise<BudgetStatus[]> {
-  const models: GeminiModel[] = ["gemini-2.5-flash", "gemini-embedding-001"];
+  const date = pacificDate(now);
+  // Always include the two Gemini models so the UI shows zero-spend entries.
+  const seeded: Array<{ provider: Provider; model: string }> = [
+    { provider: "gemini", model: "gemini-2.5-flash" },
+    { provider: "gemini", model: "gemini-embedding-001" },
+  ];
+  const existing = await db.execute({
+    sql: `SELECT DISTINCT provider, model FROM llm_quota_log WHERE date = ?`,
+    args: [date],
+  });
+  for (const r of existing.rows) {
+    const provider = String(r.provider) as Provider;
+    const model = String(r.model);
+    if (!seeded.some((s) => s.provider === provider && s.model === model)) {
+      seeded.push({ provider, model });
+    }
+  }
+
   const out: BudgetStatus[] = [];
-  for (const model of models) {
-    const { count, exhausted } = await readRow(model, "gemini", now, db);
-    const limit = await getConfig(limitKey(model), db);
-    const daemonReserve =
-      model === "gemini-2.5-flash" ? await getConfig("flash_daemon_reserve", db) : 0;
-    const daemonCeiling =
-      model === "gemini-2.5-flash" ? Math.max(0, limit - daemonReserve) : limit;
+  for (const { provider, model } of seeded) {
+    const { count, exhausted } = await readRow(model, provider, now, db);
+    // For non-gemini providers we currently don't enforce a daily limit here —
+    // OpenRouter has its own server-side cap. Future spec can promote this to
+    // config-driven if needed.
+    const limit = provider === "gemini" ? await getConfig(limitKey(model as GeminiModel), db) : Number.MAX_SAFE_INTEGER;
+    const daemonReserve = provider === "gemini" && model === "gemini-2.5-flash"
+      ? await getConfig("flash_daemon_reserve", db) : 0;
+    const daemonCeiling = provider === "gemini" && model === "gemini-2.5-flash"
+      ? Math.max(0, limit - daemonReserve) : limit;
     out.push({
-      model,
-      count,
-      limit,
-      daemonReserve,
-      daemonCeiling,
+      provider, model, count, limit, daemonReserve, daemonCeiling,
       daemonExhausted: count >= daemonCeiling,
       remaining: Math.max(0, limit - count),
       exhausted,
-      resetsAt: "midnight America/Los_Angeles",
+      resetsAt: nextPacificMidnightISO(now),
     });
   }
   return out;

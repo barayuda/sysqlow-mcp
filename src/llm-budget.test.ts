@@ -191,6 +191,19 @@ describe("getBudgetSnapshot / setBudgetConfig", () => {
   });
 });
 
+describe("getBudgetSnapshot — per-provider", () => {
+  test("returns an entry per (provider, model) tuple seen today", async () => {
+    const db = await freshDb();
+    const NOW = new Date("2026-06-08T20:00:00Z");
+    await record("gemini-2.5-flash", "gemini", NOW, db);
+    await record("google/gemma-4-31b-it:free", "openrouter", NOW, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    const providers = snap.map((s: any) => s.provider).sort();
+    expect(providers).toContain("gemini");
+    expect(providers).toContain("openrouter");
+  });
+});
+
 describe("provider-aware quota log migration", () => {
   test("ensureBudgetSchema backfills provider='gemini' on pre-existing rows", async () => {
     const db = createClient({ url: ":memory:" });
