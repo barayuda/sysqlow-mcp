@@ -67,6 +67,50 @@ if [ -n "${SYSQLOW_WORKSPACE_ROOTS:-}" ]; then
   done < <(echo "$SYSQLOW_WORKSPACE_ROOTS" | tr ',' '\n')
 fi
 
+# ---------------------------------------------------------
+# Auto-detect common workspace roots
+# ---------------------------------------------------------
+# Probe a conventional list of project-root locations and auto-add any that
+# exist. Lets users run sysqlow-mcp against projects anywhere under the
+# typical layouts without editing SYSQLOW_WORKSPACE_ROOTS manually.
+#
+# Docker bind mounts must be declared at container start, so this is the
+# closest practical equivalent to "auto-detect on call" — anything under
+# the probed roots is immediately visible inside the container; anything
+# outside still needs an explicit SYSQLOW_WORKSPACE_ROOTS entry and a
+# container restart, or sysqlow-mcp running natively (see
+# docs/running-natively.md).
+#
+# Explicit SYSQLOW_WORKSPACE_ROOTS entries are honored above; the
+# nested-path collapse below de-duplicates overlaps. Opt out entirely via
+# SYSQLOW_AUTO_DETECT_WORKSPACES=false.
+if [ "${SYSQLOW_AUTO_DETECT_WORKSPACES:-true}" != "false" ]; then
+  declare -a AUTO_DETECTED_ROOTS
+  for candidate in \
+      "$HOME/Projects" \
+      "$HOME/projects" \
+      "$HOME/work" \
+      "$HOME/code" \
+      "$HOME/src" \
+      "$HOME/dev" \
+      "$HOME/Developer" \
+      "$HOME/Documents/Projects" \
+      "$HOME/repos"
+  do
+    if [ -d "$candidate" ]; then
+      MOUNT_CANDIDATES+=("$candidate")
+      AUTO_DETECTED_ROOTS+=("$candidate")
+    fi
+  done
+  if [ ${#AUTO_DETECTED_ROOTS[@]} -gt 0 ]; then
+    echo "🔎 Auto-detected workspace roots:" >&2
+    for r in "${AUTO_DETECTED_ROOTS[@]}"; do
+      echo "   • $r" >&2
+    done
+    echo "   (disable via SYSQLOW_AUTO_DETECT_WORKSPACES=false)" >&2
+  fi
+fi
+
 # Collapse nested paths: process shortest-first, drop any candidate that
 # already nests under an accepted mount. (Docker errors on overlapping
 # bind mounts on some platforms; this also keeps the -v flag list minimal.)
@@ -91,8 +135,8 @@ for path in "${MOUNT_PATHS[@]}"; do
   echo "   • $path" >&2
   VOLUME_MOUNT="$VOLUME_MOUNT -v $path:$path"
 done
-if [ -z "${SYSQLOW_WORKSPACE_ROOTS:-}" ]; then
-  echo "   (set SYSQLOW_WORKSPACE_ROOTS=~/path1,~/path2 to expose extra workspace roots)" >&2
+if [ -z "${SYSQLOW_WORKSPACE_ROOTS:-}" ] && [ ${#AUTO_DETECTED_ROOTS[@]:-0} -eq 0 ]; then
+  echo "   (no standard workspace roots found; set SYSQLOW_WORKSPACE_ROOTS=~/path1,~/path2 to expose extra paths)" >&2
 fi
 
 # Default configuration parameters

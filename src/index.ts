@@ -1,4 +1,5 @@
 import { FastMCP } from "fastmcp";
+import { existsSync } from "fs";
 import { z } from "zod";
 import { initDatabase, client, isEmbeddedReplica } from "./db";
 import { validateKnowledgeItem } from "./sentinel";
@@ -474,7 +475,20 @@ server.addTool({
       const result = await learnCodebase(projectPath);
       
       if (result.detectedFiles.length === 0) {
-        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.`;
+        // If we're running inside Docker AND the path isn't visible inside the
+        // container, it's almost certainly a mount-scope issue, not a typo.
+        // Surface a concrete remedy instead of the generic "ensure the path
+        // is correct" message that sent earlier users hunting for filesystem
+        // bugs that didn't exist.
+        const inDocker = existsSync("/.dockerenv");
+        const pathInvisible = inDocker && !existsSync(projectPath);
+        const hint = pathInvisible
+          ? `\n\nThis path is outside the container's mount scope. Either:\n` +
+            `  • Place the project under one of the auto-probed roots (~/Projects, ~/work, ~/code, ~/src, ~/dev, ~/Developer, ~/Documents/Projects, ~/repos) and restart \`./run-docker.sh\`.\n` +
+            `  • Add the path to SYSQLOW_WORKSPACE_ROOTS in .env (comma-separated, ~ expands) and restart.\n` +
+            `  • Run sysqlow-mcp natively (bypass Docker filesystem isolation) — see docs/running-natively.md.`
+          : "";
+        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.${hint}`;
       }
       
       const snippetsSummary = result.snippets.map((s, idx) => {

@@ -47,7 +47,8 @@ bun audit
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
-| `SYSQLOW_WORKSPACE_ROOTS` | Optional (Docker only) | Comma-separated list of extra host paths to bind-mount into the container (e.g. `~/Projects,~/work`). The default mount scope is the sysqlow-mcp checkout plus `$PWD` only — no `$HOME` exposure. Use this when you need the coherence engine to see workspaces outside those two paths. `~` is expanded, nested paths collapse to the shortest ancestor, non-existent entries are skipped with a warning. |
+| `SYSQLOW_WORKSPACE_ROOTS` | Optional (Docker only) | Comma-separated list of extra host paths to bind-mount into the container (e.g. `~/Projects,~/work`). Explicit entries are honored on top of the auto-probe (below). `~` is expanded, nested paths collapse to the shortest ancestor, non-existent entries are skipped with a warning. |
+| `SYSQLOW_AUTO_DETECT_WORKSPACES` | Optional (Docker only) | Default `true`. `run-docker.sh` probes a fixed list at startup (`~/Projects`, `~/projects`, `~/work`, `~/code`, `~/src`, `~/dev`, `~/Developer`, `~/Documents/Projects`, `~/repos`) and auto-mounts any that exist — so projects under standard locations "just work" without editing `.env`. Set `false` to fall back to the previous narrow default (sysqlow-mcp checkout + `$PWD`). Projects outside any auto-probed root still need an explicit `SYSQLOW_WORKSPACE_ROOTS` entry — or [run sysqlow-mcp natively](docs/running-natively.md) to bypass Docker mount scope entirely. |
 
 > LLM budget caps (flash/embedding daily limits, daemon reserve, catch-up size) are stored in the `llm_budget_config` table and tuned at runtime via the `set_llm_budget` MCP tool — not via environment variables.
 
