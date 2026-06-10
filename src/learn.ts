@@ -9,14 +9,65 @@ export interface CodebaseAnalysisResult {
   snippets: LearnedKnowledgeItem[];
 }
 
-export async function learnCodebase(projectPath: string): Promise<CodebaseAnalysisResult> {
+export interface CollectedFile {
+  filename: string;
+  content: string;
+  truncated: boolean;
+}
+
+export interface CollectedCodebase {
+  projectName: string;
+  resolvedPath: string;
+  detectedFiles: string[];
+  files: CollectedFile[];
+  // Pre-concatenated FILE-delimited blob, kept for callers (learnCodebase
+  // → analyzeCodebaseWithLLM) that prefer a single prompt-ready string.
+  combinedContent: string;
+  // Diagnostic — true when the requested path doesn't exist inside this
+  // process's filesystem AND we appear to be running in Docker. Callers can
+  // surface this directly instead of guessing.
+  isDockerIsolated: boolean;
+}
+
+const TARGET_MANIFESTS = [
+  "package.json",
+  "composer.json",
+  "Cargo.toml",
+  "go.mod",
+  "pyproject.toml",
+  "requirements.txt",
+  "README.md",
+  ".env.example",
+  "tsconfig.json",
+];
+
+function isRunningInDocker(): boolean {
+  try {
+    if (existsSync("/.dockerenv")) return true;
+    if (existsSync("/proc/1/cgroup")) {
+      return readFileSync("/proc/1/cgroup", "utf8").includes("docker");
+    }
+  } catch (_) {}
+  return false;
+}
+
+/**
+ * Read project manifest/README files at `projectPath` and return their raw
+ * contents. Performs zero LLM calls and zero DB writes — safe to call from
+ * an MCP tool whose contract is "hand the bytes back to the client agent
+ * for analysis." Used as the file-collection step inside `learnCodebase`
+ * and exposed standalone via the `collect_codebase_files` MCP tool so the
+ * calling agent can do the cognitive work on its own model instead of
+ * burning sysqlow's Gemini quota.
+ */
+export async function collectCodebaseFiles(projectPath: string): Promise<CollectedCodebase> {
   let resolvedPath = projectPath;
-  
+  const inDocker = isRunningInDocker();
+
   // Smart container fallback: If the requested path is a host path for the current project
   // and does not exist inside the sandbox, resolve it directly to the container's working directory
   if (!existsSync(resolvedPath)) {
-    const isDocker = existsSync("/.dockerenv") || existsSync("/proc/1/cgroup") && readFileSync("/proc/1/cgroup", "utf8").includes("docker");
-    if (isDocker && (basename(resolvedPath) === "sysqlow-mcp" || basename(resolvedPath) === basename(process.cwd()))) {
+    if (inDocker && (basename(resolvedPath) === "sysqlow-mcp" || basename(resolvedPath) === basename(process.cwd()))) {
       console.error(`[SysQlow Info] Resolving isolated host path "${resolvedPath}" to container directory "${process.cwd()}"...`);
       resolvedPath = process.cwd();
     }
@@ -24,90 +75,84 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
 
   if (!existsSync(resolvedPath)) {
     console.error(`[SysQlow Warn] Project path "${resolvedPath}" does not exist inside the server filesystem.`);
-    
-    // Check if we are running in a Docker container
-    const isDocker = existsSync("/.dockerenv") || existsSync("/proc/1/cgroup") && readFileSync("/proc/1/cgroup", "utf8").includes("docker");
-    if (isDocker) {
+    if (inDocker) {
       console.error(
         `[SysQlow Info] Server is running within a Docker container. The client's host path "${resolvedPath}" is isolated and not mounted inside this container.\n` +
-        `To automatically scan your codebase, either:\n` +
-        `  1. Bind-mount your project folder into the Docker run command (e.g. -v /Users/...:/Users/...)\n` +
-        `  2. Run the MCP server natively on your host machine using Bun in SSE transport mode.`
+        `Either restart with SYSQLOW_WORKSPACE_ROOTS=<path>, place the project under one of the auto-probed roots, or run sysqlow-mcp natively (see docs/running-natively.md).`
       );
     }
-    
     return {
       projectName: basename(resolvedPath) || "Current Project",
+      resolvedPath,
       detectedFiles: [],
-      snippets: []
+      files: [],
+      combinedContent: "",
+      isDockerIsolated: inDocker,
     };
   }
 
   const filesInRoot = readdirSync(resolvedPath);
-  const targetFiles = [
-    "package.json",
-    "composer.json",
-    "Cargo.toml",
-    "go.mod",
-    "pyproject.toml",
-    "requirements.txt",
-    "README.md",
-    ".env.example",
-    "tsconfig.json"
-  ];
-
-  const detectedFiles: string[] = [];
-  let collectedContent = "";
   let projectName = basename(resolvedPath) || "Current Project";
 
-  // Check if we can extract a better project name from package.json
+  // Prefer the manifest-declared project name over the directory basename.
   if (filesInRoot.includes("package.json")) {
     try {
       const pkg = JSON.parse(readFileSync(join(resolvedPath, "package.json"), "utf8"));
-      if (pkg.name) {
-        projectName = pkg.name;
-      }
+      if (pkg.name) projectName = pkg.name;
     } catch (_) {}
   } else if (filesInRoot.includes("composer.json")) {
     try {
       const comp = JSON.parse(readFileSync(join(resolvedPath, "composer.json"), "utf8"));
-      if (comp.name) {
-        projectName = comp.name;
-      }
+      if (comp.name) projectName = comp.name;
     } catch (_) {}
   }
 
-  for (const filename of targetFiles) {
-    if (filesInRoot.includes(filename)) {
-      const fullPath = join(resolvedPath, filename);
-      try {
-        const stats = statSync(fullPath);
-        if (stats.isFile()) {
-          detectedFiles.push(filename);
-          // Limit file read to 6KB to prevent token bloating
-          let content = readFileSync(fullPath, "utf8");
-          if (content.length > 6000) {
-            content = content.substring(0, 6000) + "\n\n[... content truncated for brevity ...]";
-          }
-          collectedContent += `=== FILE: ${filename} ===\n${content}\n\n`;
-        }
-      } catch (err: any) {
-        console.error(`Failed to read file ${filename}: ${err.message}`);
-      }
+  const detectedFiles: string[] = [];
+  const files: CollectedFile[] = [];
+  let combinedContent = "";
+
+  for (const filename of TARGET_MANIFESTS) {
+    if (!filesInRoot.includes(filename)) continue;
+    const fullPath = join(resolvedPath, filename);
+    try {
+      const stats = statSync(fullPath);
+      if (!stats.isFile()) continue;
+      detectedFiles.push(filename);
+      // Cap each file at 6KB to keep both the LLM prompt and the MCP-client
+      // response payload bounded.
+      const raw = readFileSync(fullPath, "utf8");
+      const truncated = raw.length > 6000;
+      const content = truncated
+        ? raw.substring(0, 6000) + "\n\n[... content truncated for brevity ...]"
+        : raw;
+      files.push({ filename, content, truncated });
+      combinedContent += `=== FILE: ${filename} ===\n${content}\n\n`;
+    } catch (err: any) {
+      console.error(`Failed to read file ${filename}: ${err.message}`);
     }
   }
 
+  return {
+    projectName,
+    resolvedPath,
+    detectedFiles,
+    files,
+    combinedContent,
+    isDockerIsolated: false,
+  };
+}
+
+export async function learnCodebase(projectPath: string): Promise<CodebaseAnalysisResult> {
+  const collected = await collectCodebaseFiles(projectPath);
+  const { projectName, detectedFiles, combinedContent } = collected;
+
   if (detectedFiles.length === 0) {
-    return {
-      projectName,
-      detectedFiles: [],
-      snippets: []
-    };
+    return { projectName, detectedFiles: [], snippets: [] };
   }
 
   // Analyze metadata using Gemini
   console.error(`Analyzing project context for "${projectName}" using Gemini...`);
-  const snippets = await analyzeCodebaseWithLLM(projectName, collectedContent);
+  const snippets = await analyzeCodebaseWithLLM(projectName, combinedContent);
 
   // Store snippets in SQLite
   console.error(`Storing ${snippets.length} learned snippets in the database...`);

@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { z } from "zod";
 import { initDatabase, client, isEmbeddedReplica } from "./db";
 import { validateKnowledgeItem } from "./sentinel";
-import { learnCodebase } from "./learn";
+import { learnCodebase, collectCodebaseFiles } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { QuotaExhaustedError, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
@@ -505,6 +505,79 @@ ${snippetsSummary}`;
     } catch (error: any) {
       console.error(`Error in learn_codebase: ${error.message}`);
       return `Failed to analyze and learn codebase: ${error.message}`;
+    }
+  }
+});
+
+// Tool 5b: collect_codebase_files (no-LLM variant of learn_codebase)
+//
+// Returns the raw contents of detected manifest/README files so the calling
+// MCP agent can do the codebase analysis on its OWN model. This is the
+// quota-free escape hatch when sysqlow's Gemini is exhausted, or simply the
+// preferred shape when the caller is already an LLM (Claude Code, Cursor,
+// Claude Desktop) and wants to keep all cognitive work on its own side.
+//
+// The existing `learn_codebase` is kept for headless / non-LLM clients
+// (CI runners, scripts) that need sysqlow to handle the analysis.
+server.addTool({
+  name: "collect_codebase_files",
+  description: "Reads project manifest and README files and returns their raw contents to the caller WITHOUT calling any LLM (zero sysqlow Gemini quota consumed). Use this when YOU are an LLM agent and want to analyze the codebase on your own model — synthesize 3–7 Project Context snippets from the returned contents, then call `knowledge_workflow` with `intent: \"save\"` (or `store_knowledge` directly) for each finding. For headless callers without LLM access, use `learn_codebase` instead (sysqlow does the analysis via Gemini).",
+  parameters: z.object({
+    projectPath: z.string().optional().describe("Optional absolute path to the project root. Defaults to the server's current working directory."),
+  }),
+  execute: async (args) => {
+    const projectPath = args.projectPath?.trim() || process.cwd();
+    try {
+      const result = await collectCodebaseFiles(projectPath);
+
+      if (result.detectedFiles.length === 0) {
+        const hint = result.isDockerIsolated
+          ? `\n\nThis path is outside the container's mount scope. Either:\n` +
+            `  • Place the project under one of the auto-probed roots (~/Projects, ~/work, ~/code, ~/src, ~/dev, ~/Developer, ~/Documents/Projects, ~/repos) and restart \`./run-docker.sh\`.\n` +
+            `  • Add the path to SYSQLOW_WORKSPACE_ROOTS in .env (comma-separated, ~ expands) and restart.\n` +
+            `  • Run sysqlow-mcp natively (bypass Docker filesystem isolation) — see docs/running-natively.md.`
+          : "";
+        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.${hint}`;
+      }
+
+      const lang = (name: string): string =>
+        name.endsWith(".json") ? "json"
+          : name.endsWith(".toml") ? "toml"
+          : name.endsWith(".md") ? "markdown"
+          : name.endsWith(".env.example") ? "ini"
+          : "";
+
+      const fileBlocks = result.files.map(f =>
+        `### \`${f.filename}\`${f.truncated ? " *(truncated to 6KB)*" : ""}\n\n\`\`\`${lang(f.filename)}\n${f.content}\n\`\`\``
+      ).join("\n\n");
+
+      return `## 📂 Codebase Files Collected (No LLM Used)
+
+**Project name:** ${result.projectName}
+**Resolved path:** \`${result.resolvedPath}\`
+**Files detected:** ${result.detectedFiles.join(", ")}
+
+---
+
+${fileBlocks}
+
+---
+
+### 🤖 Next Steps for the Calling Agent
+
+You are the analyzer for this codebase. Synthesize the contents above into 3–7 focused Project Context snippets, then persist each finding via one of:
+
+- \`knowledge_workflow { intent: "save", topic, content, category }\` — preferred (single orchestrator call)
+- \`store_knowledge { topic, content, category, projectId? }\` — direct store
+
+**Topic naming:** prefix with the project name, e.g. \`${result.projectName}: Frontend Stack\`, \`${result.projectName}: Build Tooling\`, \`${result.projectName}: Backend Conventions\`.
+
+**Canonical categories:** \`Backend\` / \`Frontend\` / \`Database\` / \`DevOps\` / \`Testing\` / \`Tooling\` / \`Project Context\`.
+
+**Why this tool exists:** \`learn_codebase\` performs the same synthesis via sysqlow's internal Gemini call (consumes daily quota). \`collect_codebase_files\` returns the same raw inputs to YOU instead — the cognitive work runs on the caller's model, leaving sysqlow's quota untouched. Architecture note: ADR-0002 and SKILL.md.`;
+    } catch (error: any) {
+      console.error(`Error in collect_codebase_files: ${error.message}`);
+      return `Failed to collect codebase files: ${error.message}`;
     }
   }
 });
