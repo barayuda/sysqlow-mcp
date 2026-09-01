@@ -280,6 +280,29 @@ export async function initDatabase() {
       console.error(`[DB Migration Warn] Failed to create relations table: ${err.message}`);
     }
 
+    // Auto-migration: observations table (episodic memory timeline) on existing databases.
+    try {
+      await client.execute(`
+        CREATE TABLE IF NOT EXISTS observations (
+          id         TEXT PRIMARY KEY,
+          project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+          session_id TEXT,
+          agent      TEXT,
+          kind       TEXT NOT NULL DEFAULT 'note',
+          title      TEXT NOT NULL,
+          body       TEXT NOT NULL,
+          files      TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await client.execute(
+        `CREATE INDEX IF NOT EXISTS idx_observations_project_time ON observations(project_id, created_at DESC)`
+      );
+      console.error("[DB Migration] Verified observations table.");
+    } catch (err: any) {
+      console.error(`[DB Migration Warn] Failed to create observations table: ${err.message}`);
+    }
+
     // Auto-migration: LLM budget guard tables (quota log + tunable config).
     try {
       const { ensureBudgetSchema } = await import("./llm-budget");

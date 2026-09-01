@@ -79,6 +79,22 @@ CREATE TABLE IF NOT EXISTS knowledge_relations (
 CREATE INDEX IF NOT EXISTS idx_relations_source ON knowledge_relations(source_id);
 CREATE INDEX IF NOT EXISTS idx_relations_target ON knowledge_relations(target_id);
 
+-- Episodic memory: timestamped session events (decisions, bug fixes, discoveries,
+-- session summaries) recorded by AI agents as they work. Complements
+-- technical_knowledge (semantic memory / timeless facts) with a timeline.
+CREATE TABLE IF NOT EXISTS observations (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+    session_id TEXT,           -- caller-supplied grouping key (one per agent session)
+    agent      TEXT,           -- which AI client recorded it (e.g. "claude-code", "cursor")
+    kind       TEXT NOT NULL DEFAULT 'note',  -- decision | bugfix | discovery | change | session_summary | note
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    files      TEXT,           -- JSON array of touched file paths
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_observations_project_time ON observations(project_id, created_at DESC);
+
 -- Context isolation invariant: a relation may exist only when at least one endpoint is
 -- generic (project_id IS NULL) OR both endpoints belong to the same project.
 CREATE TRIGGER IF NOT EXISTS enforce_relation_isolation
