@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { join, basename } from "path";
 import { analyzeCodebaseWithLLM, LearnedKnowledgeItem, generateEmbedding } from "./llm";
 import { client, isEmbeddedReplica } from "./db";
+import { detectCurrentProject } from "./coherence";
 
 export interface CodebaseAnalysisResult {
   projectName: string;
@@ -154,6 +155,16 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
   console.error(`Analyzing project context for "${projectName}" using Gemini...`);
   const snippets = await analyzeCodebaseWithLLM(projectName, combinedContent);
 
+  // Resolve the project row for this workspace so learned snippets carry
+  // project_id from birth instead of waiting for the topic-prefix backfill.
+  let projectId: string | null = null;
+  try {
+    const proj = await detectCurrentProject(collected.resolvedPath);
+    projectId = proj.id;
+  } catch (err: any) {
+    console.error(`[Learn Warn] Could not resolve project row for "${collected.resolvedPath}": ${err.message}`);
+  }
+
   // Store snippets in SQLite
   console.error(`Storing ${snippets.length} learned snippets in the database...`);
   
@@ -181,9 +192,10 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
             SET content = ?,
                 is_validated = 1,
                 confidence_score = 10,
-                last_validated_at = CURRENT_TIMESTAMP
+                last_validated_at = CURRENT_TIMESTAMP,
+                project_id = COALESCE(?, project_id)
             WHERE topic = ? AND category = ?`,
-      args: [item.content, item.topic, normalizedCategory],
+      args: [item.content, projectId, item.topic, normalizedCategory],
     });
 
     let targetId = "";
@@ -198,9 +210,9 @@ export async function learnCodebase(projectPath: string): Promise<CodebaseAnalys
     } else {
       const id = crypto.randomUUID();
       await client.execute({
-        sql: `INSERT INTO technical_knowledge (id, topic, content, category, is_validated, confidence_score)
-              VALUES (?, ?, ?, ?, 1, 10)`,
-        args: [id, item.topic, item.content, normalizedCategory],
+        sql: `INSERT INTO technical_knowledge (id, topic, content, category, is_validated, confidence_score, project_id)
+              VALUES (?, ?, ?, ?, 1, 10, ?)`,
+        args: [id, item.topic, item.content, normalizedCategory, projectId],
       });
       targetId = id;
     }

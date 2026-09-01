@@ -85,8 +85,8 @@ function detectStack(rootPath: string): string {
   return JSON.stringify(stack);
 }
 
-export async function detectCurrentProject(): Promise<Project> {
-  const rootPath = findProjectRoot(getCwd());
+export async function detectCurrentProject(startDir?: string): Promise<Project> {
+  const rootPath = findProjectRoot(startDir ?? getCwd());
   const name = readProjectName(rootPath);
   const stack = detectStack(rootPath);
 
