@@ -26,6 +26,12 @@ bun run compile
 # Run workflow integration test
 bun run test:workflow
 
+# Run unit tests against an isolated local SQLite file (fast, deterministic).
+# Plain `bun test` inherits .env and runs against the LIVE Turso replica —
+# network latency can stretch the suite from seconds to an hour and abort
+# long tests. Prefer test:local for logic verification.
+bun run test:local
+
 # Offline coherence audit (no MCP server needed) — prints structural / semantic / re-discovery report
 bun audit
 ```
@@ -65,7 +71,9 @@ The server has two distinct runtime personalities, controlled by `MCP_TRANSPORT`
 
 | File | Role |
 |---|---|
-| `src/index.ts` | Entry point. Defines all 18 FastMCP tools, Hono HTTP routes (`/api/graph`, `/api/validate/:id`, `/api/logs`, `/api/env`, `/api/budget`, `/api/outdated`), auto-hook on client `connect`, background Sentinel cron, and the console log ring buffer for the dashboard. Tools split into two cognitive patterns: server-side LLM (`learn_codebase`, `validate_knowledge`, `import_documentation` — burn sysqlow's Gemini quota) and client-side LLM (`collect_codebase_files` — returns raw data, client does synthesis). See [SKILL.md](SKILL.md). |
+| `src/index.ts` | Entry point. Defines all 21 FastMCP tools + the `session_context` MCP prompt, Hono HTTP routes (`/api/graph`, `/api/validate/:id`, `/api/logs`, `/api/env`, `/api/budget`, `/api/outdated`, `/api/context`, `/api/timeline`), gated auto-hook on client `connect` (first-contact learn only — see Session memory below), background Sentinel cron, and the console log ring buffer for the dashboard. Tools split into two cognitive patterns: server-side LLM (`learn_codebase`, `validate_knowledge`, `import_documentation` — burn sysqlow's Gemini quota) and client-side LLM (`collect_codebase_files` — returns raw data, client does synthesis). See [SKILL.md](SKILL.md). |
+| `src/context.ts` | Session briefing engine (`buildSessionBriefing`, `renderBriefingMarkdown`, `resolveProjectHint`, `CAPTURE_GUIDANCE`). Pure DB reads, zero LLM. Explicit project hints (`projectId`/`projectPath`/`projectName`) never fall back to the server's cwd — critical on a shared SSE server where the asking client's workspace isn't the server's directory. |
+| `src/observations.ts` | Episodic memory (`recordObservation`, `getTimeline`). Timestamped session events (decision, bugfix, discovery, change, session_summary, note) scoped per project; recent events feed back into the briefing. |
 | `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup (parent_id, project_id, embeddings table, projects, knowledge_relations + isolation trigger, llm_quota_log, `last_validation_reasoning` + `last_suggested_diff` columns). |
 | `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. Persists LLM reasoning + suggested diff on outdated/incorrect verdicts; clears them on `up_to_date` recovery so `list_outdated_knowledge` always reflects the latest state. |
 | `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini-primary (ADR-0001); chat-completion calls are wrapped in `routeWithFallback` so `QuotaExhaustedError` routes to OpenRouter when configured (ADR-0002). Throws if GEMINI_API_KEY is unset. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
@@ -77,11 +85,12 @@ The server has two distinct runtime personalities, controlled by `MCP_TRANSPORT`
 
 ### Database
 
-Three tables (all in a single SQLite file):
+Core tables (all in a single SQLite file):
 
-1. **`technical_knowledge`** — primary store. UUIDs as PKs, `parent_id` self-reference for hierarchy, `is_validated` / `confidence_score` / `source_url` managed by Sentinel.
+1. **`technical_knowledge`** — primary store (semantic memory: timeless facts). UUIDs as PKs, `parent_id` self-reference for hierarchy, `is_validated` / `confidence_score` / `source_url` managed by Sentinel.
 2. **`technical_knowledge_fts`** — FTS5 virtual table kept in sync via INSERT/UPDATE/DELETE triggers. Used as primary search index before falling back to `LIKE`.
 3. **`technical_knowledge_embeddings`** — stores Gemini vector embeddings as JSON-serialized `TEXT`. Cosine similarity is computed in TypeScript, not in the database.
+4. **`observations`** — episodic memory: timestamped session events (`kind`, `title`, `body`, optional `session_id`/`agent`/`files`), project-scoped via `project_id`.
 
 When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded replica: reads are local (microsecond), writes are committed locally then async-synced to Turso cloud. The `isEmbeddedReplica` flag in `db.ts` gates all `client.sync()` calls.
 
@@ -93,6 +102,17 @@ When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded r
 2. SQL `LIKE` on topic/content/category
 3. (semantic only) Cosine similarity on `technical_knowledge_embeddings`
 4. (semantic only) Falls back to FTS5/LIKE if embedding generation fails
+
+### Session memory (claude-mem-style workflow)
+
+SysQlow serves as a cross-agent memory: every MCP client (Claude Code, Cursor, Claude Desktop via SSE) shares the same briefing + capture loop.
+
+- **Inject at start:** `get_session_context { projectPath?, projectId?, projectName?, format? }` returns a compact no-LLM briefing: project identity, top project knowledge, stack-matched generic snippets, recent observations, recent knowledge, Sentinel-flagged items, and the capture protocol. Mirrored as the `session_context` MCP prompt, `knowledge_workflow { intent: "context" }`, and `GET /api/context` (for Claude Code SessionStart hooks — see [`docs/claude-code-hooks.md`](docs/claude-code-hooks.md)).
+- **Capture during:** `record_observation { kind, title, body, sessionId?, agent?, files? }` for episodic events; `knowledge_workflow { intent: "save" }` for durable facts. `knowledge_workflow { intent: "observe" }` maps topic/content → title/body.
+- **Recall history:** `get_timeline { limit?, kind?, sinceDays? }` and `GET /api/timeline`.
+- **Hand off at end:** agents record a `session_summary` observation; it appears in the next session's briefing regardless of which AI client opens it.
+- **Auto-hook is gated:** on client connect (and `rootsChanged`), the server runs `learnCodebase` ONLY on first contact — i.e., when the workspace's project has zero snippets (checked via `project_id` plus legacy topic-prefix match). Known projects skip the LLM entirely; their memory is served from the DB. An in-flight set dedupes concurrent connects. `learnCodebase` also assigns `project_id` at insert time (resolved via `detectCurrentProject(resolvedPath)`).
+- **Hint resolution:** explicit `projectPath` hints that don't resolve (unmounted Docker path, Windows-side path) fall back to DB `root_path` lookup, then `projectName`; an unresolved explicit hint yields a generic-only briefing — never a silent wrong-project answer from the server's own cwd.
 
 ### Sentinel triage
 

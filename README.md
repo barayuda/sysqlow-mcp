@@ -233,6 +233,16 @@ Lists snippets the Sentinel validator (interactive or daemon) could not confirm 
 
 **Equivalent REST endpoint (SSE mode):** `GET /api/outdated?limit=20&project_id=<uuid>` returns the same shape.
 
+### 10. Session Memory: `get_session_context`, `record_observation`, `get_timeline`
+
+SysQlow doubles as a **cross-agent project memory** (think claude-mem, but shared by every MCP client you use — Claude Code, Cursor, Claude Desktop, etc.):
+
+* **`get_session_context { projectPath?, projectId?, projectName?, maxItems?, format? }`** — call at the **start of every session**. Returns a compact markdown briefing: project identity, top project knowledge, stack-matched generic snippets, recent session activity, recently added knowledge, Sentinel-flagged items, and the capture protocol. Pure DB reads — zero LLM quota. Also exposed as the `session_context` MCP prompt, `knowledge_workflow { intent: "context" }`, and `GET /api/context?path=<abs>&format=markdown|json`.
+* **`record_observation { title, body, kind?, sessionId?, agent?, files? }`** — episodic memory. Record decisions, bug fixes, discoveries as they happen (`kind`: `decision` | `bugfix` | `discovery` | `change` | `session_summary` | `note`). Before ending a long session, record a `session_summary` — the next agent (in any IDE) starts from it via the briefing.
+* **`get_timeline { limit?, kind?, sinceDays? }`** — newest-first event log per project; answers *"what happened last session?"* without any LLM call. REST mirror: `GET /api/timeline`.
+
+The auto-hook on client connect is **first-contact gated**: `learnCodebase` (server-side Gemini) runs only when a workspace's project has zero knowledge; known projects are served from the DB. For fully automatic context injection in Claude Code, see the optional [SessionStart hooks pack](docs/claude-code-hooks.md).
+
 ---
 
 ## ✍️ Prompt Aliases And Ready Prompt Pack

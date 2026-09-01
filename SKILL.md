@@ -25,14 +25,29 @@ SysQlow exposes **two complementary call patterns** for cognitive work — choos
 
 ---
 
+## 🧠 Session Memory Protocol (do this in EVERY session)
+
+SysQlow is the developer's persistent, cross-agent memory. Sessions in Claude Code, Cursor, Claude Desktop, and any other MCP client all share it. To behave like a continuous assistant instead of an amnesiac one:
+
+1. **START — load memory:** call `get_session_context { projectPath: "<workspace-root>" }` as your first sysqlow call. It returns a compact briefing (project identity, top knowledge, recent session activity, Sentinel-flagged items) plus this protocol. Zero LLM quota — it's pure DB reads. (Also available as the `session_context` MCP prompt and `knowledge_workflow { intent: "context" }`.)
+2. **DURING — search before deriving:** `knowledge_workflow { intent: "semantic", query }` before re-researching anything.
+3. **DURING — save as you go:** durable facts via `knowledge_workflow { intent: "save" }`; session events (decisions, bug fixes, discoveries) via `record_observation { kind, title, body }`.
+4. **END — hand off:** before a long session ends, record `record_observation { kind: "session_summary", title, body }` describing what changed and why. The next agent — in any IDE — starts from your summary.
+
+Semantic memory (`technical_knowledge`) holds timeless facts; episodic memory (`observations`) holds what happened when. The briefing merges both.
+
+---
+
 ## 🛠️ Core Tool Capabilities
 
-SysQlow-MCP exposes **17 Tools**. You should usually call the unified orchestrator instead of the micro-tools, but two no-LLM data-provider tools are listed separately because they invert the work direction (server hands raw data to you, you do the synthesis).
+SysQlow-MCP exposes **21 Tools**. You should usually call the unified orchestrator instead of the micro-tools, but the no-LLM data-provider tools are listed separately because they invert the work direction (server hands raw data to you, you do the synthesis).
 
 ### 1. Unified Orchestrator: `knowledge_workflow`
 Always prefer this tool over individual micro-tools for *normal* read/write flows. It minimizes tool-calling roundtrips and optimizes context tokens.
 
 #### Available Intents & Usage Guidelines:
+*   **`context`**: Returns the session briefing as markdown (same as `get_session_context`). Call at session start.
+*   **`observe`**: Records an episodic event. Maps `topic` → event title, `content` → event body, plus optional `kind` (decision, bugfix, discovery, change, session_summary, note).
 *   **`learn`**: Server-side analysis. Calls sysqlow's Gemini to synthesize Project Context snippets. **If Gemini quota is exhausted, switch to `collect_codebase_files` instead** (see below).
 *   **`save`**: Call this whenever the user teaches you a new trick, command, or architectural rule. Ensure you normalized categories properly (e.g. `"api"` ➔ `"Backend"`, `"tailwind"` ➔ `"Frontend"`).
 *   **`semantic`**: Always use this for conceptual queries (e.g. *"how do I configure local replicas?"*). It ranks snippets using local cosine vector similarity and falls back to FTS5 matches under rate limits.
@@ -52,10 +67,15 @@ Always prefer this tool over individual micro-tools for *normal* read/write flow
 
 This mirrors the output of `learn_codebase` but shifts the synthesis from sysqlow's Gemini onto your model. Zero server quota consumed.
 
-### 3. Triage: `list_outdated_knowledge`
+### 3. Session Memory: `get_session_context`, `record_observation`, `get_timeline`
+*   **`get_session_context { projectPath?, projectId?, projectName?, maxItems?, format? }`** — the session-start briefing (see the Session Memory Protocol above). Pass `projectPath` when you know your workspace root; on Docker/remote servers where the path isn't mounted, pass `projectName` instead. `format: "json"` returns the structured object.
+*   **`record_observation { title, body, kind?, sessionId?, agent?, files? }`** — write one episodic event. Set `agent` to your client name (e.g. `"claude-code"`, `"cursor"`) so the timeline shows who did what.
+*   **`get_timeline { limit?, kind?, sinceDays? }`** — newest-first event log; answers "what happened last session?" without any LLM call.
+
+### 4. Triage: `list_outdated_knowledge`
 Surfaces snippets the Sentinel daemon has flagged as `outdated`, `incorrect`, or `unverifiable` along with the LLM's reasoning + suggested diff. Returns `{ count, items: [{ id, topic, reasoning, suggested_diff, source_url, confidence_score, last_validated_at }] }`. Use this to triage the validation backlog without re-running the LLM.
 
-### 4. Coherence: `audit_coherence`
+### 5. Coherence: `audit_coherence`
 Three-phase project-identity sweep: (1) structural — auto-applies safe fixes, (2) semantic — returns suggestions for selective application, (3) relation re-discovery. Call after large ingestion batches or when the dashboard graph looks tangled.
 
 ---
