@@ -1,13 +1,16 @@
 import { FastMCP } from "fastmcp";
+import { existsSync } from "fs";
 import { z } from "zod";
 import { initDatabase, client, isEmbeddedReplica } from "./db";
 import { validateKnowledgeItem } from "./sentinel";
-import { learnCodebase } from "./learn";
+import { learnCodebase, collectCodebaseFiles } from "./learn";
 import { dashboardHtml } from "./dashboard-html";
 import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { QuotaExhaustedError, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
 import { cosineSimilarity } from "./search";
 import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, runBackgroundCoherence, _stashSuggestions, _loadSuggestions } from "./coherence";
+import { buildSessionBriefing, renderBriefingMarkdown } from "./context";
+import { recordObservation, getTimeline, OBSERVATION_KINDS } from "./observations";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
 export const logsRingBuffer: string[] = [];
@@ -474,7 +477,20 @@ server.addTool({
       const result = await learnCodebase(projectPath);
       
       if (result.detectedFiles.length === 0) {
-        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.`;
+        // If we're running inside Docker AND the path isn't visible inside the
+        // container, it's almost certainly a mount-scope issue, not a typo.
+        // Surface a concrete remedy instead of the generic "ensure the path
+        // is correct" message that sent earlier users hunting for filesystem
+        // bugs that didn't exist.
+        const inDocker = existsSync("/.dockerenv");
+        const pathInvisible = inDocker && !existsSync(projectPath);
+        const hint = pathInvisible
+          ? `\n\nThis path is outside the container's mount scope. Either:\n` +
+            `  • Place the project under one of the auto-probed roots (~/Projects, ~/work, ~/code, ~/src, ~/dev, ~/Developer, ~/Documents/Projects, ~/repos) and restart \`./run-docker.sh\`.\n` +
+            `  • Add the path to SYSQLOW_WORKSPACE_ROOTS in .env (comma-separated, ~ expands) and restart.\n` +
+            `  • Run sysqlow-mcp natively (bypass Docker filesystem isolation) — see docs/running-natively.md.`
+          : "";
+        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.${hint}`;
       }
       
       const snippetsSummary = result.snippets.map((s, idx) => {
@@ -491,6 +507,79 @@ ${snippetsSummary}`;
     } catch (error: any) {
       console.error(`Error in learn_codebase: ${error.message}`);
       return `Failed to analyze and learn codebase: ${error.message}`;
+    }
+  }
+});
+
+// Tool 5b: collect_codebase_files (no-LLM variant of learn_codebase)
+//
+// Returns the raw contents of detected manifest/README files so the calling
+// MCP agent can do the codebase analysis on its OWN model. This is the
+// quota-free escape hatch when sysqlow's Gemini is exhausted, or simply the
+// preferred shape when the caller is already an LLM (Claude Code, Cursor,
+// Claude Desktop) and wants to keep all cognitive work on its own side.
+//
+// The existing `learn_codebase` is kept for headless / non-LLM clients
+// (CI runners, scripts) that need sysqlow to handle the analysis.
+server.addTool({
+  name: "collect_codebase_files",
+  description: "Reads project manifest and README files and returns their raw contents to the caller WITHOUT calling any LLM (zero sysqlow Gemini quota consumed). Use this when YOU are an LLM agent and want to analyze the codebase on your own model — synthesize 3–7 Project Context snippets from the returned contents, then call `knowledge_workflow` with `intent: \"save\"` (or `store_knowledge` directly) for each finding. For headless callers without LLM access, use `learn_codebase` instead (sysqlow does the analysis via Gemini).",
+  parameters: z.object({
+    projectPath: z.string().optional().describe("Optional absolute path to the project root. Defaults to the server's current working directory."),
+  }),
+  execute: async (args) => {
+    const projectPath = args.projectPath?.trim() || process.cwd();
+    try {
+      const result = await collectCodebaseFiles(projectPath);
+
+      if (result.detectedFiles.length === 0) {
+        const hint = result.isDockerIsolated
+          ? `\n\nThis path is outside the container's mount scope. Either:\n` +
+            `  • Place the project under one of the auto-probed roots (~/Projects, ~/work, ~/code, ~/src, ~/dev, ~/Developer, ~/Documents/Projects, ~/repos) and restart \`./run-docker.sh\`.\n` +
+            `  • Add the path to SYSQLOW_WORKSPACE_ROOTS in .env (comma-separated, ~ expands) and restart.\n` +
+            `  • Run sysqlow-mcp natively (bypass Docker filesystem isolation) — see docs/running-natively.md.`
+          : "";
+        return `No configuration or README files found at path "${projectPath}". Ensure the path is correct and contains package.json, composer.json, or README.md.${hint}`;
+      }
+
+      const lang = (name: string): string =>
+        name.endsWith(".json") ? "json"
+          : name.endsWith(".toml") ? "toml"
+          : name.endsWith(".md") ? "markdown"
+          : name.endsWith(".env.example") ? "ini"
+          : "";
+
+      const fileBlocks = result.files.map(f =>
+        `### \`${f.filename}\`${f.truncated ? " *(truncated to 6KB)*" : ""}\n\n\`\`\`${lang(f.filename)}\n${f.content}\n\`\`\``
+      ).join("\n\n");
+
+      return `## 📂 Codebase Files Collected (No LLM Used)
+
+**Project name:** ${result.projectName}
+**Resolved path:** \`${result.resolvedPath}\`
+**Files detected:** ${result.detectedFiles.join(", ")}
+
+---
+
+${fileBlocks}
+
+---
+
+### 🤖 Next Steps for the Calling Agent
+
+You are the analyzer for this codebase. Synthesize the contents above into 3–7 focused Project Context snippets, then persist each finding via one of:
+
+- \`knowledge_workflow { intent: "save", topic, content, category }\` — preferred (single orchestrator call)
+- \`store_knowledge { topic, content, category, projectId? }\` — direct store
+
+**Topic naming:** prefix with the project name, e.g. \`${result.projectName}: Frontend Stack\`, \`${result.projectName}: Build Tooling\`, \`${result.projectName}: Backend Conventions\`.
+
+**Canonical categories:** \`Backend\` / \`Frontend\` / \`Database\` / \`DevOps\` / \`Testing\` / \`Tooling\` / \`Project Context\`.
+
+**Why this tool exists:** \`learn_codebase\` performs the same synthesis via sysqlow's internal Gemini call (consumes daily quota). \`collect_codebase_files\` returns the same raw inputs to YOU instead — the cognitive work runs on the caller's model, leaving sysqlow's quota untouched. Architecture note: ADR-0002 and SKILL.md.`;
+    } catch (error: any) {
+      console.error(`Error in collect_codebase_files: ${error.message}`);
+      return `Failed to collect codebase files: ${error.message}`;
     }
   }
 });
@@ -987,15 +1076,139 @@ server.addTool({
   },
 });
 
+// Tool: list_outdated_knowledge
+// Surfaces snippets that the Sentinel daemon (or an interactive validate_knowledge call)
+// marked as outdated/incorrect. Returns the reasoning + suggested diff the LLM produced,
+// so a human or LLM client can triage without re-spending a Gemini call to re-derive them.
+server.addTool({
+  name: "list_outdated_knowledge",
+  description: "List snippets the Sentinel validator could not confirm as up-to-date — outdated, incorrect, or unverifiable (no search evidence). Each item carries the reasoning persisted from the last validation pass and, when applicable, a suggested unified diff. Useful for triaging what the daemon found overnight.",
+  parameters: z.object({
+    limit: z.number().int().min(1).max(200).default(50).describe("Max snippets to return (default 50, max 200)."),
+    projectId: z.string().optional().describe("If set, restrict to snippets belonging to this project."),
+  }),
+  execute: async ({ limit, projectId }) => {
+    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const args: any[] = [];
+    if (projectId) {
+      filters.push("project_id = ?");
+      args.push(projectId);
+    }
+    args.push(limit);
+    const sql = `
+      SELECT id, topic, category, project_id, source_url, confidence_score,
+             last_validated_at, last_validation_reasoning, last_suggested_diff
+      FROM technical_knowledge
+      WHERE ${filters.join(" AND ")}
+      ORDER BY last_validated_at DESC
+      LIMIT ?
+    `;
+    const res = await client.execute({ sql, args });
+    const items = res.rows.map((r: any) => ({
+      id: r.id,
+      topic: r.topic,
+      category: r.category,
+      project_id: r.project_id,
+      source_url: r.source_url || null,
+      confidence_score: r.confidence_score,
+      last_validated_at: r.last_validated_at,
+      reasoning: r.last_validation_reasoning || null,
+      suggested_diff: r.last_suggested_diff || null,
+    }));
+    return JSON.stringify({ count: items.length, items }, null, 2);
+  },
+});
+
+// Session-start briefing: the "memory injection" tool. Call this FIRST in every
+// session — it returns everything the bank knows about the current project as a
+// compact digest, plus the capture protocol for writing memory back. Zero LLM cost.
+server.addTool({
+  name: "get_session_context",
+  description: "Get a compact briefing of everything SysQlow knows about a project: project identity, top knowledge snippets, stack-matched generic knowledge, recent additions, and Sentinel-flagged outdated items. Call this at the START of every session to load the developer's persistent memory into context. Pure DB reads — no LLM quota consumed.",
+  parameters: z.object({
+    projectPath: z.string().optional().describe("Absolute path of the workspace to brief on. Preferred hint — pass your workspace root."),
+    projectId: z.string().optional().describe("Known project UUID (from a previous briefing or list)."),
+    projectName: z.string().optional().describe("Project name fallback when the path isn't visible to the server (e.g. Docker/remote setups)."),
+    maxItems: z.number().int().min(1).max(25).default(8).describe("Max project-knowledge items in the briefing (default 8)."),
+    format: z.enum(["markdown", "json"]).default("markdown").describe("markdown (default) renders a digest ready for your context; json returns the structured briefing."),
+  }),
+  execute: async ({ projectPath, projectId, projectName, maxItems, format }) => {
+    const briefing = await buildSessionBriefing({ projectPath, projectId, projectName, maxItems });
+    if (format === "json") return JSON.stringify(briefing, null, 2);
+    return renderBriefingMarkdown(briefing);
+  },
+});
+
+// Episodic memory: record a session event (decision, bugfix, discovery, session summary).
+server.addTool({
+  name: "record_observation",
+  description: "Record an episodic memory event: a decision made, bug fixed, discovery, change, or end-of-session summary. Observations are timestamped, scoped to the current project, and surface in the next get_session_context briefing — this is how one AI session hands off to the next (across Claude Code, Cursor, Claude Desktop, etc.). Record a kind='session_summary' observation before ending a long session.",
+  parameters: z.object({
+    title: z.string().min(1).describe("Short headline of what happened (e.g. 'Switched search fallback to SearXNG')."),
+    body: z.string().min(1).describe("What happened and why — enough detail for the next agent to pick up from."),
+    kind: z.enum(OBSERVATION_KINDS).default("note").describe("Event type: decision, bugfix, discovery, change, session_summary, or note."),
+    projectPath: z.string().optional().describe("Workspace root to scope the observation to (defaults to server-side detection)."),
+    projectId: z.string().optional().describe("Known project UUID."),
+    projectName: z.string().optional().describe("Project name fallback when the path isn't visible to the server."),
+    sessionId: z.string().optional().describe("Opaque session grouping key (pass the same value for all observations of one session)."),
+    agent: z.string().optional().describe("Which AI client is recording (e.g. 'claude-code', 'cursor', 'claude-desktop')."),
+    files: z.array(z.string()).optional().describe("File paths touched by this event."),
+  }),
+  execute: async (args) => {
+    try {
+      const { id, project } = await recordObservation(args);
+      return JSON.stringify({
+        status: "success",
+        id,
+        kind: args.kind,
+        project: project ? { id: project.id, name: project.name } : null,
+      }, null, 2);
+    } catch (error: any) {
+      console.error(`Error in record_observation: ${error.message}`);
+      return JSON.stringify({ status: "error", message: error.message }, null, 2);
+    }
+  },
+});
+
+// Episodic memory: chronological view of what happened in a project.
+server.addTool({
+  name: "get_timeline",
+  description: "Chronological (newest-first) timeline of observations for a project: decisions, bug fixes, discoveries, session summaries. Use it to answer 'what happened recently / last session?' without re-deriving anything.",
+  parameters: z.object({
+    projectPath: z.string().optional().describe("Workspace root to scope to (defaults to server-side detection)."),
+    projectId: z.string().optional().describe("Known project UUID."),
+    projectName: z.string().optional().describe("Project name fallback."),
+    limit: z.number().int().min(1).max(100).default(20).describe("Max events to return (default 20)."),
+    kind: z.enum(OBSERVATION_KINDS).optional().describe("Filter to one event type."),
+    sinceDays: z.number().int().min(1).optional().describe("Only events from the last N days."),
+  }),
+  execute: async (args) => {
+    try {
+      const result = await getTimeline(args);
+      return JSON.stringify({
+        status: "success",
+        project: result.project ? { id: result.project.id, name: result.project.name } : null,
+        unresolved_hint: result.unresolved_hint,
+        count: result.count,
+        items: result.items,
+      }, null, 2);
+    } catch (error: any) {
+      console.error(`Error in get_timeline: ${error.message}`);
+      return JSON.stringify({ status: "error", message: error.message }, null, 2);
+    }
+  },
+});
+
 // Tool 6: knowledge_workflow
 server.addTool({
   name: "knowledge_workflow",
   description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
   parameters: z.object({
-    intent: z.enum(["learn", "save", "search", "validate", "apply", "list", "delete", "merge", "semantic", "import"]).describe("Workflow intent to execute."),
-    projectPath: z.string().optional().describe("Used by intent=learn."),
-    topic: z.string().optional().describe("Used by intent=save."),
-    content: z.string().optional().describe("Used by intent=save or intent=apply."),
+    intent: z.enum(["context", "learn", "save", "observe", "search", "validate", "apply", "list", "delete", "merge", "semantic", "import"]).describe("Workflow intent to execute."),
+    projectPath: z.string().optional().describe("Used by intent=learn, intent=context, and intent=observe."),
+    topic: z.string().optional().describe("Used by intent=save (snippet topic) and intent=observe (event title)."),
+    content: z.string().optional().describe("Used by intent=save, intent=apply, and intent=observe (event body)."),
+    kind: z.enum(OBSERVATION_KINDS).optional().describe("Used by intent=observe. Defaults to 'note'."),
     query: z.string().optional().describe("Used by intent=search."),
     category: z.string().optional().describe("Optional category for save/search."),
     id: z.string().optional().describe("Used by intent=validate or intent=apply or intent=delete."),
@@ -1009,6 +1222,33 @@ server.addTool({
     const intent = args.intent;
 
     try {
+      if (intent === "context") {
+        const briefing = await buildSessionBriefing({ projectPath: args.projectPath });
+        return renderBriefingMarkdown(briefing);
+      }
+
+      if (intent === "observe") {
+        if (!args.topic?.trim() || !args.content?.trim()) {
+          return JSON.stringify({
+            status: "error",
+            message: "For intent=observe, both topic (event title) and content (event body) are required."
+          }, null, 2);
+        }
+        const { id, project } = await recordObservation({
+          title: args.topic,
+          body: args.content,
+          kind: args.kind,
+          projectPath: args.projectPath,
+        });
+        return JSON.stringify({
+          status: "success",
+          intent,
+          id,
+          kind: args.kind ?? "note",
+          project: project ? { id: project.id, name: project.name } : null,
+        }, null, 2);
+      }
+
       if (intent === "learn") {
         const projectPath = args.projectPath?.trim() || process.cwd();
         const result = await learnCodebase(projectPath);
@@ -1588,11 +1828,57 @@ server.addTool({
   }
 });
 
+// First-contact gate for the auto-hook: server-side Gemini analysis runs ONLY
+// when the workspace's project has zero knowledge in the bank. Known projects
+// skip the LLM entirely — their memory is served from the DB via
+// get_session_context (or the session_context prompt / GET /api/context).
+const autoLearnInFlight = new Set<string>();
+
+const maybeAutoLearn = async (rootPath: string, trigger: string): Promise<void> => {
+  let project = null;
+  try {
+    project = await detectCurrentProject(rootPath);
+  } catch (err: any) {
+    console.error(`[SysQlow Warn] (${trigger}) Project detection failed for "${rootPath}": ${err.message}`);
+  }
+
+  if (project) {
+    // Count both properly scoped rows and legacy prefix-only rows that predate project_id.
+    const res = await client.execute({
+      sql: `SELECT COUNT(*) AS n FROM technical_knowledge
+            WHERE project_id = ?
+               OR (category = 'Project Context' AND (topic LIKE ? OR topic = ?))`,
+      args: [project.id, `${project.name}:%`, project.name],
+    });
+    const known = Number(res.rows[0].n);
+    if (known > 0) {
+      console.error(
+        `[SysQlow Auto-Hook] (${trigger}) Project "${project.name}" already has ${known} knowledge snippet(s) — ` +
+        `skipping auto-learn. The briefing is available via the get_session_context tool.`
+      );
+      return;
+    }
+  }
+
+  if (autoLearnInFlight.has(rootPath)) {
+    console.error(`[SysQlow Auto-Hook] (${trigger}) Auto-learn already in flight for "${rootPath}"; skipping duplicate.`);
+    return;
+  }
+  autoLearnInFlight.add(rootPath);
+  try {
+    console.error(`[SysQlow Auto-Hook] (${trigger}) First contact with "${rootPath}" — learning codebase once...`);
+    await learnCodebase(rootPath);
+    console.error(`[SysQlow Auto-Hook] (${trigger}) First-contact learning completed successfully!`);
+  } finally {
+    autoLearnInFlight.delete(rootPath);
+  }
+};
+
 // Helper to run auto-scanning for a session's workspace roots
 const triggerAutoScan = async (session: any) => {
   console.error("[SysQlow Info] Client session active. Scheduling workspace roots check...");
-  
-  // A 1000ms delay ensures client-server handshake is fully established 
+
+  // A 1000ms delay ensures client-server handshake is fully established
   // and prevents early JSON-RPC roots/list timeouts (e.g. MCP error -32001)
   setTimeout(async () => {
     try {
@@ -1600,15 +1886,12 @@ const triggerAutoScan = async (session: any) => {
       if (roots && roots.length > 0) {
         // Resolve standard file URIs (e.g. file:///Users/... -> /Users/...)
         const rootPath = roots[0].uri.replace(/^file:\/\//, "");
-        console.error(`[SysQlow Auto-Hook] Automatically learning codebase at workspace root: ${rootPath}`);
-        
-        await learnCodebase(rootPath);
-        console.error("[SysQlow Auto-Hook] Codebase auto-learning completed successfully!");
+        await maybeAutoLearn(rootPath, "connect");
       } else {
         console.error("[SysQlow Info] No workspace roots are currently open or active in the client session.");
       }
     } catch (err: any) {
-      console.error(`[SysQlow Warn] Failed to automatically learn codebase: ${err.message}`);
+      console.error(`[SysQlow Warn] Auto-hook failed on connect: ${err.message}`);
     }
   }, 1000);
 };
@@ -1631,15 +1914,30 @@ server.on("connect", ({ session }) => {
       const roots = event.roots;
       if (roots && roots.length > 0) {
         const rootPath = roots[0].uri.replace(/^file:\/\//, "");
-        console.error(`[SysQlow Auto-Hook] Re-learning updated codebase at root: ${rootPath}`);
-        
-        await learnCodebase(rootPath);
-        console.error("[SysQlow Auto-Hook] Updated codebase auto-learning completed successfully!");
+        await maybeAutoLearn(rootPath, "rootsChanged");
       }
     } catch (err: any) {
-      console.error(`[SysQlow Warn] Failed to automatically learn codebase on rootsChanged: ${err.message}`);
+      console.error(`[SysQlow Warn] Auto-hook failed on rootsChanged: ${err.message}`);
     }
   });
+});
+
+// MCP prompt: lets prompt-capable clients (Claude Desktop, etc.) inject the
+// session briefing without relying on the agent to call the tool first.
+server.addPrompt({
+  name: "session_context",
+  description: "Load the SysQlow knowledge-bank briefing for a project into the conversation.",
+  arguments: [
+    { name: "projectPath", description: "Absolute path of the workspace to brief on.", required: false },
+    { name: "projectName", description: "Project name fallback when the path isn't visible to the server.", required: false },
+  ],
+  load: async (args) => {
+    const briefing = await buildSessionBriefing({
+      projectPath: args.projectPath || undefined,
+      projectName: args.projectName || undefined,
+    });
+    return renderBriefingMarkdown(briefing);
+  },
 });
 
 // Get Hono instance
@@ -1749,6 +2047,93 @@ app.get("/api/budget", async (c) => {
   try {
     const snapshot = await getBudgetSnapshot();
     return c.json({ budget: snapshot });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
+});
+
+// Session briefing over HTTP — mirrors the get_session_context MCP tool.
+// Consumers: Claude Code SessionStart hooks (docs/claude-code-hooks.md), scripts,
+// and any client that wants the briefing without an MCP roundtrip.
+// GET /api/context?path=/abs/workspace&project_id=<uuid>&name=<project>&max_items=8&format=markdown|json
+app.get("/api/context", async (c) => {
+  try {
+    const maxItemsParam = parseInt(c.req.query("max_items") || "8", 10);
+    const briefing = await buildSessionBriefing({
+      projectPath: c.req.query("path") || undefined,
+      projectId: c.req.query("project_id") || undefined,
+      projectName: c.req.query("name") || undefined,
+      maxItems: isNaN(maxItemsParam) ? 8 : maxItemsParam,
+    });
+    if ((c.req.query("format") || "markdown") === "json") return c.json(briefing);
+    return c.text(renderBriefingMarkdown(briefing));
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
+});
+
+// Observation timeline over HTTP — mirrors the get_timeline MCP tool.
+// GET /api/timeline?path=/abs/workspace&project_id=<uuid>&name=<project>&limit=20&kind=decision&since_days=14
+app.get("/api/timeline", async (c) => {
+  try {
+    const limitParam = parseInt(c.req.query("limit") || "20", 10);
+    const sinceParam = parseInt(c.req.query("since_days") || "", 10);
+    const kindParam = c.req.query("kind");
+    const result = await getTimeline({
+      projectPath: c.req.query("path") || undefined,
+      projectId: c.req.query("project_id") || undefined,
+      projectName: c.req.query("name") || undefined,
+      limit: isNaN(limitParam) ? 20 : limitParam,
+      kind: kindParam && (OBSERVATION_KINDS as readonly string[]).includes(kindParam) ? kindParam as any : undefined,
+      sinceDays: isNaN(sinceParam) ? undefined : sinceParam,
+    });
+    return c.json({
+      project: result.project ? { id: result.project.id, name: result.project.name } : null,
+      unresolved_hint: result.unresolved_hint,
+      count: result.count,
+      items: result.items,
+    });
+  } catch (err: any) {
+    return c.json({ status: "error", message: err.message }, 500);
+  }
+});
+
+// Snippets the Sentinel validator flagged as outdated/incorrect, with reasoning + diff.
+// Mirrors the list_outdated_knowledge MCP tool for HTTP/dashboard consumers.
+app.get("/api/outdated", async (c) => {
+  try {
+    const limitParam = parseInt(c.req.query("limit") || "50", 10);
+    const limit = Math.min(200, Math.max(1, isNaN(limitParam) ? 50 : limitParam));
+    const projectId = c.req.query("project_id");
+
+    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const args: any[] = [];
+    if (projectId) {
+      filters.push("project_id = ?");
+      args.push(projectId);
+    }
+    args.push(limit);
+    const res = await client.execute({
+      sql: `SELECT id, topic, category, project_id, source_url, confidence_score,
+                   last_validated_at, last_validation_reasoning, last_suggested_diff
+            FROM technical_knowledge
+            WHERE ${filters.join(" AND ")}
+            ORDER BY last_validated_at DESC
+            LIMIT ?`,
+      args,
+    });
+    const items = res.rows.map((r: any) => ({
+      id: r.id,
+      topic: r.topic,
+      category: r.category,
+      project_id: r.project_id,
+      source_url: r.source_url || null,
+      confidence_score: r.confidence_score,
+      last_validated_at: r.last_validated_at,
+      reasoning: r.last_validation_reasoning || null,
+      suggested_diff: r.last_suggested_diff || null,
+    }));
+    return c.json({ count: items.length, items });
   } catch (err: any) {
     return c.json({ status: "error", message: err.message }, 500);
   }

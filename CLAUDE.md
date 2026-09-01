@@ -26,6 +26,12 @@ bun run compile
 # Run workflow integration test
 bun run test:workflow
 
+# Run unit tests against an isolated local SQLite file (fast, deterministic).
+# Plain `bun test` inherits .env and runs against the LIVE Turso replica —
+# network latency can stretch the suite from seconds to an hour and abort
+# long tests. Prefer test:local for logic verification.
+bun run test:local
+
 # Offline coherence audit (no MCP server needed) — prints structural / semantic / re-discovery report
 bun audit
 ```
@@ -38,11 +44,17 @@ bun audit
 | `TURSO_AUTH_TOKEN` | If Turso URL set | Auth token for Turso cloud |
 | `SYSQLOW_DB_REMOTE_ONLY` | Optional | Set to `1` to connect directly to Turso with no local SQLite file. Required for ephemeral-disk hosts (Render free, Fly machines without volumes). Fails loud at boot if `TURSO_DATABASE_URL` (libsql/https) or `TURSO_AUTH_TOKEN` is missing. Tradeoff: every read is a network round-trip — see [`docs/deploying-to-render.md`](docs/deploying-to-render.md). |
 | `GEMINI_API_KEY` | Required for LLM features | Powers Sentinel validation, embeddings (model: `gemini-2.5-flash` / `gemini-embedding-001`). The only supported LLM provider (Gemini-only, per ADR-0001). |
-| `BRAVE_API_KEY` | Optional | Web search for Sentinel; falls back to DuckDuckGo HTML scraper if absent |
+| `OPENROUTER_API_KEY` | Optional | Enables chat-completion fallback when Gemini's daily quota is exhausted. See [ADR-0002](docs/adr/0002-resilience-fallbacks.md). |
+| `OPENROUTER_FALLBACK_MODEL` | Optional | Override the default OpenRouter model (default: `google/gemma-4-31b-it:free`). |
+| `SYSQLOW_FALLBACK_ENABLED` | Optional | Default `true` when `OPENROUTER_API_KEY` is set. Set `false` to disable the fallback even when keyed. |
+| `TAVILY_API_KEY` | Optional | Web search for Sentinel via [Tavily](https://tavily.com) (free tier: 1,000 searches/month, no card). Falls back to DuckDuckGo HTML scraper if absent — note the DDG scraper is often blocked from Docker/data-center egress IPs. |
+| `SEARXNG_URL` | Optional | Self-hosted SearXNG instance URL (tier-3 search fallback). No quota, no key — most durable choice for Docker deployments. |
+| `SYSQLOW_DDG_FALLBACK` | Optional | Default `true`. Set to `false` to disable the last-resort DDG-HTML scraper — recommended for hosts whose egress IP is blocked by DDG. |
 | `LOCAL_DB_PATH` | Optional | Override SQLite file path (default: `sysqlow.db` in cwd). Ignored when `SYSQLOW_DB_REMOTE_ONLY=1`. |
 | `MCP_TRANSPORT` | Optional | Set to `sse` for HTTP/SSE + dashboard mode; otherwise stdio |
 | `PORT` | Optional | HTTP port for SSE mode (default: `50741`) |
-| `SYSQLOW_WORKSPACE_ROOTS` | Optional (Docker only) | Comma-separated list of extra host paths to bind-mount into the container (e.g. `~/Projects,~/work`). The default mount scope is the sysqlow-mcp checkout plus `$PWD` only — no `$HOME` exposure. Use this when you need the coherence engine to see workspaces outside those two paths. `~` is expanded, nested paths collapse to the shortest ancestor, non-existent entries are skipped with a warning. |
+| `SYSQLOW_WORKSPACE_ROOTS` | Optional (Docker only) | Comma-separated list of extra host paths to bind-mount into the container (e.g. `~/Projects,~/work`). Explicit entries are honored on top of the auto-probe (below). `~` is expanded, nested paths collapse to the shortest ancestor, non-existent entries are skipped with a warning. |
+| `SYSQLOW_AUTO_DETECT_WORKSPACES` | Optional (Docker only) | Default `true`. `run-docker.sh` probes a fixed list at startup (`~/Projects`, `~/projects`, `~/work`, `~/code`, `~/src`, `~/dev`, `~/Developer`, `~/Documents/Projects`, `~/repos`) and auto-mounts any that exist — so projects under standard locations "just work" without editing `.env`. Set `false` to fall back to the previous narrow default (sysqlow-mcp checkout + `$PWD`). Projects outside any auto-probed root still need an explicit `SYSQLOW_WORKSPACE_ROOTS` entry — or [run sysqlow-mcp natively](docs/running-natively.md) to bypass Docker mount scope entirely. |
 
 > LLM budget caps (flash/embedding daily limits, daemon reserve, catch-up size) are stored in the `llm_budget_config` table and tuned at runtime via the `set_llm_budget` MCP tool — not via environment variables.
 
@@ -59,22 +71,26 @@ The server has two distinct runtime personalities, controlled by `MCP_TRANSPORT`
 
 | File | Role |
 |---|---|
-| `src/index.ts` | Entry point. Defines all 11 FastMCP tools, Hono HTTP routes, auto-hook on client `connect`, background Sentinel cron, and the console log ring buffer for the dashboard. |
-| `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup. |
-| `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. |
-| `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini-only (ADR-0001); throws if GEMINI_API_KEY is unset. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
-| `src/search.ts` | `webSearch()` (Brave → DuckDuckGo HTML scraper fallback) and `cosineSimilarity()` (in-process vector math). |
-| `src/learn.ts` | `learnCodebase(path)` — scans project root for config/manifest files, collects content, calls `analyzeCodebaseWithLLM`, stores results as "Project Context" snippets. |
+| `src/index.ts` | Entry point. Defines all 21 FastMCP tools + the `session_context` MCP prompt, Hono HTTP routes (`/api/graph`, `/api/validate/:id`, `/api/logs`, `/api/env`, `/api/budget`, `/api/outdated`, `/api/context`, `/api/timeline`), gated auto-hook on client `connect` (first-contact learn only — see Session memory below), background Sentinel cron, and the console log ring buffer for the dashboard. Tools split into two cognitive patterns: server-side LLM (`learn_codebase`, `validate_knowledge`, `import_documentation` — burn sysqlow's Gemini quota) and client-side LLM (`collect_codebase_files` — returns raw data, client does synthesis). See [SKILL.md](SKILL.md). |
+| `src/context.ts` | Session briefing engine (`buildSessionBriefing`, `renderBriefingMarkdown`, `resolveProjectHint`, `CAPTURE_GUIDANCE`). Pure DB reads, zero LLM. Explicit project hints (`projectId`/`projectPath`/`projectName`) never fall back to the server's cwd — critical on a shared SSE server where the asking client's workspace isn't the server's directory. |
+| `src/observations.ts` | Episodic memory (`recordObservation`, `getTimeline`). Timestamped session events (decision, bugfix, discovery, change, session_summary, note) scoped per project; recent events feed back into the briefing. |
+| `src/db.ts` | Turso/libSQL client factory. Selects embedded-replica vs local-only mode based on `TURSO_DATABASE_URL`. Runs schema DDL and auto-migrations on startup (parent_id, project_id, embeddings table, projects, knowledge_relations + isolation trigger, llm_quota_log, `last_validation_reasoning` + `last_suggested_diff` columns). |
+| `src/sentinel.ts` | `validateKnowledgeItem(id)` — fetches snippet, runs web search, calls LLM, writes validation metadata back to DB. Persists LLM reasoning + suggested diff on outdated/incorrect verdicts; clears them on `up_to_date` recovery so `list_outdated_knowledge` always reflects the latest state. |
+| `src/llm.ts` | All LLM calls: `validateContentWithLLM`, `analyzeCodebaseWithLLM`, `extractDocumentationWithLLM`, `generateEmbedding`. Gemini-primary (ADR-0001); chat-completion calls are wrapped in `routeWithFallback` so `QuotaExhaustedError` routes to OpenRouter when configured (ADR-0002). Throws if GEMINI_API_KEY is unset. Includes `cleanLLMJson()` regex repair for stray backslashes in LLM JSON output. |
+| `src/llm-providers.ts` | `LLMProvider` interface + `OpenRouterProvider` + `routeWithFallback()` — engages OpenRouter when Gemini throws `QuotaExhaustedError`, no-op otherwise. |
+| `src/search.ts` | `webSearch()` runs the Tavily → SearXNG → DDG fallback chain (DDG opt-out via `SYSQLOW_DDG_FALLBACK=false`). Returns empty when every tier fails, so Sentinel's zero-evidence guard can mark snippets `unverifiable` instead of fabricating a verdict. Also exports `cosineSimilarity()` for in-process vector math. |
+| `src/learn.ts` | Two callers share file-collection via `collectCodebaseFiles(path)` (pure: fs reads + truncation, no LLM, no DB). `learnCodebase(path)` then calls `analyzeCodebaseWithLLM` + stores snippets (server-side LLM path). The `collect_codebase_files` MCP tool returns the same raw data to the calling agent for client-side synthesis (zero sysqlow quota). |
 | `src/dashboard-html.ts` | Single large string export: the full HTML/JS for the Vis.js knowledge graph dashboard. |
-| `schema.sql` | SQLite DDL imported via `with { type: "text" }` at build time. Defines `technical_knowledge`, FTS5 virtual table `technical_knowledge_fts`, three sync triggers, and `technical_knowledge_embeddings`. |
+| `schema.sql` | SQLite DDL imported via `with { type: "text" }` at build time. Defines `technical_knowledge` (with `last_validation_reasoning` + `last_suggested_diff` columns for daemon-marked outdated triage), FTS5 virtual table `technical_knowledge_fts`, three sync triggers, `technical_knowledge_embeddings`, `projects`, and `knowledge_relations` (with `enforce_relation_isolation` trigger). |
 
 ### Database
 
-Three tables (all in a single SQLite file):
+Core tables (all in a single SQLite file):
 
-1. **`technical_knowledge`** — primary store. UUIDs as PKs, `parent_id` self-reference for hierarchy, `is_validated` / `confidence_score` / `source_url` managed by Sentinel.
+1. **`technical_knowledge`** — primary store (semantic memory: timeless facts). UUIDs as PKs, `parent_id` self-reference for hierarchy, `is_validated` / `confidence_score` / `source_url` managed by Sentinel.
 2. **`technical_knowledge_fts`** — FTS5 virtual table kept in sync via INSERT/UPDATE/DELETE triggers. Used as primary search index before falling back to `LIKE`.
 3. **`technical_knowledge_embeddings`** — stores Gemini vector embeddings as JSON-serialized `TEXT`. Cosine similarity is computed in TypeScript, not in the database.
+4. **`observations`** — episodic memory: timestamped session events (`kind`, `title`, `body`, optional `session_id`/`agent`/`files`), project-scoped via `project_id`.
 
 When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded replica: reads are local (microsecond), writes are committed locally then async-synced to Turso cloud. The `isEmbeddedReplica` flag in `db.ts` gates all `client.sync()` calls.
 
@@ -86,6 +102,27 @@ When `TURSO_DATABASE_URL` is a `libsql://` URL, the client runs as an embedded r
 2. SQL `LIKE` on topic/content/category
 3. (semantic only) Cosine similarity on `technical_knowledge_embeddings`
 4. (semantic only) Falls back to FTS5/LIKE if embedding generation fails
+
+### Session memory (claude-mem-style workflow)
+
+SysQlow serves as a cross-agent memory: every MCP client (Claude Code, Cursor, Claude Desktop via SSE) shares the same briefing + capture loop.
+
+- **Inject at start:** `get_session_context { projectPath?, projectId?, projectName?, format? }` returns a compact no-LLM briefing: project identity, top project knowledge, stack-matched generic snippets, recent observations, recent knowledge, Sentinel-flagged items, and the capture protocol. Mirrored as the `session_context` MCP prompt, `knowledge_workflow { intent: "context" }`, and `GET /api/context` (for Claude Code SessionStart hooks — see [`docs/claude-code-hooks.md`](docs/claude-code-hooks.md)).
+- **Capture during:** `record_observation { kind, title, body, sessionId?, agent?, files? }` for episodic events; `knowledge_workflow { intent: "save" }` for durable facts. `knowledge_workflow { intent: "observe" }` maps topic/content → title/body.
+- **Recall history:** `get_timeline { limit?, kind?, sinceDays? }` and `GET /api/timeline`.
+- **Hand off at end:** agents record a `session_summary` observation; it appears in the next session's briefing regardless of which AI client opens it.
+- **Auto-hook is gated:** on client connect (and `rootsChanged`), the server runs `learnCodebase` ONLY on first contact — i.e., when the workspace's project has zero snippets (checked via `project_id` plus legacy topic-prefix match). Known projects skip the LLM entirely; their memory is served from the DB. An in-flight set dedupes concurrent connects. `learnCodebase` also assigns `project_id` at insert time (resolved via `detectCurrentProject(resolvedPath)`).
+- **Hint resolution:** explicit `projectPath` hints that don't resolve (unmounted Docker path, Windows-side path) fall back to DB `root_path` lookup, then `projectName`; an unresolved explicit hint yields a generic-only briefing — never a silent wrong-project answer from the server's own cwd.
+
+### Sentinel triage
+
+Every `validateKnowledgeItem` call persists the LLM's `reasoning` and `suggested_diff` to the `last_validation_reasoning` and `last_suggested_diff` columns. On `up_to_date` verdicts both are NULLed (so a recovered row doesn't carry stale advice forever). Daemon-driven and interactive validations are symmetric in this — the LLM's cognitive output never silently dies in a log line again.
+
+Surface the backlog via:
+- **MCP:** `list_outdated_knowledge { limit?, projectId? }` → `{ count, items: [{ id, topic, reasoning, suggested_diff, source_url, confidence_score, last_validated_at }] }`
+- **HTTP (SSE mode):** `GET /api/outdated?limit=20&project_id=<uuid>` → same shape
+
+A snippet with `is_validated=0 AND last_validated_at IS NOT NULL` was *checked and rejected* by the validator; `is_validated=0 AND last_validated_at IS NULL` is "never checked yet" (different state, different action).
 
 ### LLM JSON repair
 

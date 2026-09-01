@@ -1,7 +1,7 @@
 import { canSpend, record, markExhausted, parseRetryInfo, QuotaExhaustedError, type Caller } from "./llm-budget";
 
 export interface ValidationReport {
-  status: "up_to_date" | "outdated" | "incorrect";
+  status: "up_to_date" | "outdated" | "incorrect" | "unverifiable";
   reasoning: string;
   suggested_diff: string | null;
   source_url: string | null;
@@ -83,7 +83,12 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: Since you are returning a JSON object, all backslashes (\\) in string values (such as PHP namespaces or file paths) MUST be properly double-escaped as (\\\\) to ensure the JSON is valid. Do not wrap in markdown or backticks.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<ValidationReport>(prompt, geminiKey, caller);
+    const { routeWithFallback } = await import("./llm-providers");
+    return await routeWithFallback<ValidationReport>(
+      () => runGeminiJSONGeneric<ValidationReport>(prompt, geminiKey, caller),
+      caller,
+      prompt,
+    );
   }
 
   throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
@@ -168,10 +173,10 @@ async function runGeminiJSONGeneric<T>(
       console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
       await new Promise((r) => setTimeout(r, sleepMs));
       res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs, false);
     } else {
       console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
-      throw new QuotaExhaustedError(model, null);
+      throw new QuotaExhaustedError(model, null, false);
     }
   }
 
@@ -224,7 +229,12 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: All backslashes (\\\\) in string values (such as paths, namespaces, or escapes in code blocks) MUST be double-escaped to ensure the JSON is valid.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey, caller);
+    const { routeWithFallback } = await import("./llm-providers");
+    return await routeWithFallback<ImportedDocumentation>(
+      () => runGeminiJSONGeneric<ImportedDocumentation>(prompt, geminiKey, caller),
+      caller,
+      prompt,
+    );
   }
 
   throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
@@ -272,7 +282,12 @@ Your response MUST be valid JSON matching this schema exactly.
 IMPORTANT: All backslashes (\\\\) in string values (such as paths or namespaces) MUST be double-escaped to ensure the JSON is valid.`;
 
   if (geminiKey) {
-    return await runGeminiJSONGeneric<LearnedKnowledgeItem[]>(prompt, geminiKey, caller);
+    const { routeWithFallback } = await import("./llm-providers");
+    return await routeWithFallback<LearnedKnowledgeItem[]>(
+      () => runGeminiJSONGeneric<LearnedKnowledgeItem[]>(prompt, geminiKey, caller),
+      caller,
+      prompt,
+    );
   }
 
   throw new Error("No LLM API key configured. Please set GEMINI_API_KEY.");
@@ -309,10 +324,10 @@ async function embedGemini(text: string, apiKey: string, caller: Caller = "inter
       console.error(`[SysQlow LLM] RPM throttle on ${model}; sleeping ${sleepMs}ms then retrying once.`);
       await new Promise((r) => setTimeout(r, sleepMs));
       res = await fetchWithRetry(url, requestInit);
-      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs);
+      if (res.status === 429) throw new QuotaExhaustedError(model, retryDelayMs, false);
     } else {
       console.error(`[SysQlow LLM] 429 on ${model} with no retryDelay; throwing without persisting exhaustion.`);
-      throw new QuotaExhaustedError(model, null);
+      throw new QuotaExhaustedError(model, null, false);
     }
   }
 

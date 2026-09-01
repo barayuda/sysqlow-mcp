@@ -56,20 +56,20 @@ describe("canSpend / record", () => {
   test("daemon blocked at limit-reserve, interactive still allowed", async () => {
     const db = await freshDb();
     // flash daemon ceiling = flash_daily_limit(20) - flash_daemon_reserve(8) = 12
-    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", NOW, db);
+    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", "gemini", NOW, db);
     expect(await canSpend("gemini-2.5-flash", "daemon", NOW, db)).toBe(false);
     expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(true);
   });
 
   test("interactive blocked at absolute limit", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", NOW, db);
+    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", "gemini", NOW, db);
     expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(false);
   });
 
   test("counter is per-model and per-day", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", NOW, db);
+    for (let i = 0; i < 20; i++) await record("gemini-2.5-flash", "gemini", NOW, db);
     expect(await canSpend("gemini-embedding-001", "interactive", NOW, db)).toBe(true);
     const tomorrow = new Date("2026-05-30T20:00:00Z");
     expect(await canSpend("gemini-2.5-flash", "interactive", tomorrow, db)).toBe(true);
@@ -77,7 +77,7 @@ describe("canSpend / record", () => {
 
   test("markExhausted blocks today, clears tomorrow", async () => {
     const db = await freshDb();
-    await markExhausted("gemini-2.5-flash", NOW, db);
+    await markExhausted("gemini-2.5-flash", "gemini", NOW, db);
     expect(await canSpend("gemini-2.5-flash", "interactive", NOW, db)).toBe(false);
     const tomorrow = new Date("2026-05-30T20:00:00Z");
     expect(await canSpend("gemini-2.5-flash", "interactive", tomorrow, db)).toBe(true);
@@ -85,9 +85,9 @@ describe("canSpend / record", () => {
 
   test("embeddings: daemon ceiling == full limit (no reserve)", async () => {
     const db = await freshDb();
-    for (let i = 0; i < 99; i++) await record("gemini-embedding-001", NOW, db);
+    for (let i = 0; i < 99; i++) await record("gemini-embedding-001", "gemini", NOW, db);
     expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(true);
-    await record("gemini-embedding-001", NOW, db);
+    await record("gemini-embedding-001", "gemini", NOW, db);
     expect(await canSpend("gemini-embedding-001", "daemon", NOW, db)).toBe(false);
   });
 });
@@ -142,8 +142,8 @@ describe("getBudgetSnapshot / setBudgetConfig", () => {
   const NOW = new Date("2026-05-29T20:00:00Z");
   test("snapshot reports per-model count/limit/remaining", async () => {
     const db = await freshDb();
-    await record("gemini-2.5-flash", NOW, db);
-    await record("gemini-2.5-flash", NOW, db);
+    await record("gemini-2.5-flash", "gemini", NOW, db);
+    await record("gemini-2.5-flash", "gemini", NOW, db);
     const snap = await getBudgetSnapshot(NOW, db);
     const flash = snap.find((s) => s.model === "gemini-2.5-flash")!;
     expect(flash.count).toBe(2);
@@ -175,7 +175,7 @@ describe("getBudgetSnapshot / setBudgetConfig", () => {
   test("snapshot reports daemonCeiling and daemonExhausted", async () => {
     const db = await freshDb();
     // defaults: limit 20, reserve 8 → daemon ceiling 12
-    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", NOW, db);
+    for (let i = 0; i < 12; i++) await record("gemini-2.5-flash", "gemini", NOW, db);
     const snap = await getBudgetSnapshot(NOW, db);
     const flash = snap.find((s) => s.model === "gemini-2.5-flash")!;
     expect(flash.daemonCeiling).toBe(12);
@@ -185,8 +185,63 @@ describe("getBudgetSnapshot / setBudgetConfig", () => {
 
   test("snapshot reflects markExhausted", async () => {
     const db = await freshDb();
-    await markExhausted("gemini-2.5-flash", NOW, db);
+    await markExhausted("gemini-2.5-flash", "gemini", NOW, db);
     const snap = await getBudgetSnapshot(NOW, db);
     expect(snap.find((s) => s.model === "gemini-2.5-flash")!.exhausted).toBe(true);
+  });
+});
+
+describe("getBudgetSnapshot — per-provider", () => {
+  test("returns an entry per (provider, model) tuple seen today", async () => {
+    const db = await freshDb();
+    const NOW = new Date("2026-06-08T20:00:00Z");
+    await record("gemini-2.5-flash", "gemini", NOW, db);
+    await record("google/gemma-4-31b-it:free", "openrouter", NOW, db);
+    const snap = await getBudgetSnapshot(NOW, db);
+    const providers = snap.map((s: any) => s.provider).sort();
+    expect(providers).toContain("gemini");
+    expect(providers).toContain("openrouter");
+  });
+});
+
+describe("provider-aware quota log migration", () => {
+  test("ensureBudgetSchema backfills provider='gemini' on pre-existing rows", async () => {
+    const db = createClient({ url: ":memory:" });
+    // Simulate an *old* schema (pre-migration) and pre-existing data
+    await db.execute(`
+      CREATE TABLE llm_quota_log (
+        date TEXT NOT NULL, model TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        exhausted INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (date, model)
+      )
+    `);
+    await db.execute({
+      sql: "INSERT INTO llm_quota_log (date, model, count) VALUES (?, ?, ?)",
+      args: ["2026-06-01", "gemini-2.5-flash", 15],
+    });
+
+    await ensureBudgetSchema(db);
+
+    const res = await db.execute("SELECT date, provider, model, count FROM llm_quota_log");
+    expect(res.rows).toHaveLength(1);
+    expect(res.rows[0].provider).toBe("gemini");
+    expect(Number(res.rows[0].count)).toBe(15);
+  });
+
+  test("canSpend and record operate on a (date, provider, model) tuple", async () => {
+    const db = await freshDb();
+    const NOW = new Date("2026-06-08T20:00:00Z");
+    await record("gemini-2.5-flash", "gemini", NOW, db);
+    await record("google/gemma-4-31b-it:free", "openrouter", NOW, db);
+    const rows = await db.execute("SELECT provider, model, count FROM llm_quota_log ORDER BY provider");
+    expect(rows.rows).toHaveLength(2);
+    expect(rows.rows[0].provider).toBe("gemini");
+    expect(rows.rows[1].provider).toBe("openrouter");
+
+    // Bug-trap: if canSpend's WHERE clause ignored the provider column,
+    // the 1 openrouter record above would count toward gemini's daily cap.
+    const canSpendGemini = await canSpend("gemini-2.5-flash", "interactive", NOW, db);
+    expect(canSpendGemini).toBe(true);
   });
 });

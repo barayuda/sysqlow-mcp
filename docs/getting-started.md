@@ -15,7 +15,7 @@
 5. [Choosing your transport mode](#5-choosing-your-transport-mode)
 6. [Connecting your MCP client](#6-connecting-your-mcp-client)
 7. [Your first snippet (end-to-end walkthrough)](#7-your-first-snippet-end-to-end-walkthrough)
-8. [The 13 MCP tools — when to use which](#8-the-13-mcp-tools--when-to-use-which)
+8. [The 17 MCP tools — when to use which](#8-the-17-mcp-tools--when-to-use-which)
 9. [The Coherence Engine (project scoping)](#9-the-coherence-engine-project-scoping)
 10. [The dashboard (SSE mode)](#10-the-dashboard-sse-mode)
 11. [Background daemons (Sentinel + Coherence)](#11-background-daemons-sentinel--coherence)
@@ -31,7 +31,7 @@
 
 - **Stores technical snippets** (code, configs, commands, architecture notes) in SQLite — either standalone or as a [Turso](https://turso.tech) embedded replica synced to the cloud.
 - **Auto-detects which project** you're in and scopes project-specific notes to that workspace (the [Coherence Engine](./coherence-usage.md)).
-- **Validates snippets** against live web docs using Google Gemini + Brave Search (or DuckDuckGo) — the **Sentinel** daemon.
+- **Validates snippets** against live web docs using Google Gemini + Tavily (or DuckDuckGo) — the **Sentinel** daemon.
 - **Visualizes** the knowledge graph in a browser dashboard.
 - **Learns your codebase** by scanning manifests (`package.json`, `composer.json`, `go.mod`, etc.) and storing architectural summaries.
 
@@ -53,7 +53,7 @@ You can have both at once (different clients connecting to whichever fits).
 
 - **[Turso](https://turso.tech)** account — for cloud-synced cross-device snippets. Free tier is sufficient. Skip this to run purely local (a plain SQLite file).
 - **[Google AI Studio](https://aistudio.google.com)** API key — unlocks the Sentinel validator, semantic search embeddings, and `import_documentation` LLM extraction. Gemini is the only supported LLM provider (see [ADR-0001](../docs/adr/0001-gemini-only-remove-openai-fallback.md)).
-- **[Brave Search](https://brave.com/search/api/)** API key — better web search results for Sentinel. Optional; DuckDuckGo HTML scraper is the keyless fallback.
+- **[Tavily](https://tavily.com)** API key — LLM-optimized web search results for Sentinel. Free tier covers 1,000 searches/month with no credit card. Optional; DuckDuckGo HTML scraper is the keyless fallback, but DDG is frequently IP-blocked from Docker / data-center egress.
 - **Docker** — only if you prefer containerized deployment.
 
 ### What works with what
@@ -64,7 +64,7 @@ You can have both at once (different clients connecting to whichever fits).
 | + Turso URL & token | Multi-device sync via embedded replica (local cache + background sync) |
 | + Turso URL & token + `SYSQLOW_DB_REMOTE_ONLY=1` | Direct-to-Turso, no local file — for ephemeral-disk hosts (Render free, Fly without volumes). See [`deploying-to-render.md`](deploying-to-render.md) |
 | + GEMINI_API_KEY | Sentinel validator + semantic search + `import_documentation` LLM extraction |
-| + BRAVE_API_KEY | Higher-quality web search for Sentinel (vs. DuckDuckGo HTML scraping) |
+| + TAVILY_API_KEY | LLM-optimized web search for Sentinel (1,000 free/month; DDG fallback is often blocked in Docker) |
 
 ## 3. 5-minute quick start (zero-config local)
 
@@ -114,7 +114,7 @@ TURSO_AUTH_TOKEN="eyJhbGc..."
 GEMINI_API_KEY="AIzaSy..."
 
 # Web search for Sentinel validator (optional, DDG is the keyless fallback)
-BRAVE_API_KEY="..."
+TAVILY_API_KEY="..."
 
 # Override local SQLite path. Default: sysqlow.db in cwd. Ignored when
 # SYSQLOW_DB_REMOTE_ONLY=1 (no local file is created in that mode).
@@ -140,7 +140,7 @@ Full reference: see [CLAUDE.md](../CLAUDE.md#environment-variables) and [`.env.e
 |---|---|
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | Sign up at [turso.tech](https://turso.tech), `turso db create sysqlow`, `turso db show sysqlow --url`, `turso db tokens create sysqlow` |
 | `GEMINI_API_KEY` | [aistudio.google.com](https://aistudio.google.com) → Get API key → Create |
-| `BRAVE_API_KEY` | [api.search.brave.com](https://api.search.brave.com) → free tier 2K queries/month |
+| `TAVILY_API_KEY` | [tavily.com](https://tavily.com) → free tier 1,000 searches/month, no credit card |
 
 ### What the LLM key is used for
 
@@ -210,7 +210,7 @@ Open your Cursor settings file (`Cmd+Shift+P → "Cursor Settings"` → MCP), an
 }
 ```
 
-Restart Cursor. The MCP indicator should show `sysqlow-mcp` connected. In the chat panel, type *"What MCP tools do I have?"* — you should see all 13 tools listed (including the coherence tools `audit_coherence` / `merge_projects` / `reassign_project` and the budget tools `get_llm_budget` / `set_llm_budget`).
+Restart Cursor. The MCP indicator should show `sysqlow-mcp` connected. In the chat panel, type *"What MCP tools do I have?"* — you should see all 17 tools listed (including the coherence tools `audit_coherence` / `merge_projects` / `reassign_project`, the budget tools `get_llm_budget` / `set_llm_budget`, and the Sentinel-triage tool `list_outdated_knowledge`).
 
 ### 6b. Claude Desktop
 
@@ -277,7 +277,7 @@ The agent calls `semantic_search`. If `GEMINI_API_KEY` is set, this uses cosine 
 
 > *"Audit that rate limiting snippet against current Laravel docs."*
 
-The agent calls `validate_knowledge` with the UUID. Sentinel searches the web, asks the LLM to compare your snippet to live docs, and returns a structured report with a `status` (`valid` / `needs_update` / `incorrect`), a `confidence_score`, a `source_url`, a `reasoning`, and a `suggested_diff`. **Nothing is auto-written.**
+The agent calls `validate_knowledge` with the UUID. Sentinel searches the web (Tavily → DuckDuckGo), asks the LLM to compare your snippet to live docs, and returns a structured report with a `status` (`up_to_date` / `outdated` / `incorrect`), a `confidence_score`, a `source_url`, a `reasoning`, and a `suggested_diff`. **The snippet content is never auto-rewritten**, but the reasoning and diff *are* persisted to the row so you can pull them up later with `list_outdated_knowledge` without spending another Gemini call.
 
 ### Step 5 — Commit the suggested fix
 
@@ -287,23 +287,27 @@ The agent calls `commit_update`. By default it re-runs validation, then writes t
 
 If you watch the dashboard during this, the node's color shifts from amber (pending) to emerald (validated).
 
-## 8. The 13 MCP tools — when to use which
+## 8. The 17 MCP tools — when to use which
 
 | Tool | Trigger phrases | What it does |
 |---|---|---|
 | `learn_codebase` | "analyze this workspace", "learn the project stack" | Scans your project root for manifests, asks LLM to summarize, stores as `Project Context` snippets |
 | `store_knowledge` | "save this snippet", "remember that…" | Writes a row to `technical_knowledge`; auto-sets `project_id` for `Project Context` |
 | `recall_knowledge` | "find notes about…", "list all snippets" | FTS5 keyword search with LIKE fallback; scoped to current project ∪ generic |
+| `list_knowledge` | "show every snippet", "list IDs in this project" | Compact listing for browsing/triage |
 | `semantic_search` | "search semantically for…", "concept search" | Cosine similarity over embeddings, with FTS5/LIKE fallback |
-| `validate_knowledge` | "audit snippet X", "validate against docs" | Sentinel reads the snippet, searches the web, returns LLM-reasoned report (read-only) |
+| `validate_knowledge` | "audit snippet X", "validate against docs" | Sentinel reads the snippet, searches the web, returns LLM-reasoned report; persists reasoning + suggested diff to the row |
 | `commit_update` | "apply that update", "commit the diff" | Persists an approved update + re-validates by default |
+| `delete_knowledge` | "delete snippet X" | Removes a snippet (cascades through FTS, embeddings, relations) |
+| `merge_knowledge` | "merge snippet A into B" | Combines two snippets, keeps the canonical one |
+| `list_outdated_knowledge` *(new)* | "show what the validator flagged overnight", "triage outdated snippets" | Returns snippets where Sentinel set `is_validated=0` with `last_validated_at IS NOT NULL`; includes the persisted reasoning + suggested diff. Same data is also available as `GET /api/outdated` in SSE mode. |
 | `knowledge_workflow` | high-level intent prompts | Router for save/search/validate/apply/delete/merge/semantic/import |
 | `import_documentation` | "scrape and save these docs" | Fetches a URL, LLM-extracts as Markdown, stores |
-| `audit_coherence` *(new)* | "audit the databank", "run coherence checks" | Three-phase audit: structural / semantic / relation re-discovery |
-| `merge_projects` *(new)* | "merge project A into B" | Reassigns all snippets, deletes drop project |
-| `reassign_project` *(new)* | "move snippet X to project Y", "promote to generic" | Single-snippet correction with auto edge pruning |
-| `get_llm_budget` *(new)* | "show my Gemini quota", "how much budget left today" | Reports today's per-model usage, daemon reserve, remaining calls, exhausted flag, and Pacific-midnight reset time |
-| `set_llm_budget` *(new)* | "raise the flash daily limit to 30", "set embed catch-up to 5" | Updates `flash_daily_limit` / `flash_daemon_reserve` / `embed_daily_limit` / `embed_catchup_per_pass` at runtime — takes effect on the next call |
+| `audit_coherence` | "audit the databank", "run coherence checks" | Three-phase audit: structural / semantic / relation re-discovery |
+| `merge_projects` | "merge project A into B" | Reassigns all snippets, deletes drop project |
+| `reassign_project` | "move snippet X to project Y", "promote to generic" | Single-snippet correction with auto edge pruning |
+| `get_llm_budget` | "show my Gemini quota", "how much budget left today" | Reports today's per-model usage, daemon reserve, remaining calls, exhausted flag, and Pacific-midnight reset time |
+| `set_llm_budget` | "raise the flash daily limit to 30", "set embed catch-up to 5" | Updates `flash_daily_limit` / `flash_daemon_reserve` / `embed_daily_limit` / `embed_catchup_per_pass` at runtime — takes effect on the next call |
 
 ### Pattern: knowledge_workflow as the easy entry point
 
@@ -462,7 +466,7 @@ bun install
 |---|---|
 | No `GEMINI_API_KEY` | Set it; validator can't reason without an LLM |
 | Rate limit hit | Wait 1 minute (Gemini free tier: ~15 RPM); the budget guard already sleeps the exact `retryDelay` and retries once |
-| Brave API exhausted | DDG fallback kicks in automatically; results may be lower quality |
+| Tavily API exhausted | DDG fallback kicks in automatically; on Docker hosts DDG may be IP-blocked — top up the Tavily key or run a SearXNG sidecar |
 
 ### `validate_knowledge` returns `{"status":"deferred"}`
 
@@ -510,8 +514,8 @@ LOCAL_DB_PATH="data/sysqlow.db"
 # LLM (Gemini-only per ADR-0001)
 GEMINI_API_KEY="AIzaSy..."
 
-# Web search (Brave is higher quality; DDG fallback is keyless)
-BRAVE_API_KEY="BSA..."
+# Web search (Tavily is LLM-optimized; DDG fallback is keyless but often blocked in Docker)
+TAVILY_API_KEY="tvly-..."
 
 # Transport — uncomment to switch to SSE+dashboard mode
 # MCP_TRANSPORT="sse"

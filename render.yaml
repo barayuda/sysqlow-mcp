@@ -47,5 +47,5 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: BRAVE_API_KEY
+      - key: TAVILY_API_KEY
         sync: false
