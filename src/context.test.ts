@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { client, initDatabase } from "./db";
-import { resolveProjectHint, buildSessionBriefing, renderBriefingMarkdown } from "./context";
+import {
+  resolveProjectHint,
+  resolveSnippetProjectId,
+  buildSessionBriefing,
+  renderBriefingMarkdown,
+  buildCaptureGuidance,
+} from "./context";
+import { recordObservation } from "./observations";
 
 /**
  * Tests run against the live configured DB (same pattern as coherence.test.ts):
@@ -23,6 +30,10 @@ describe("session context briefing", () => {
   });
 
   afterEach(async () => {
+    await client.execute({
+      sql: "DELETE FROM observations WHERE title LIKE ?",
+      args: [`${tag}%`],
+    });
     await client.execute({
       sql: "DELETE FROM technical_knowledge WHERE topic LIKE ?",
       args: [`${tag}%`],
@@ -49,11 +60,13 @@ describe("session context briefing", () => {
     opts: { validated?: boolean; flagged?: string; category?: string; confidence?: number } = {},
   ) => {
     const id = crypto.randomUUID();
+    // last_validated_at is deliberately left to the schema default, exactly
+    // like store_knowledge does; only a Sentinel rejection sets the reasoning.
     await client.execute({
       sql: `INSERT INTO technical_knowledge
               (id, topic, content, category, project_id, is_validated, confidence_score,
-               last_validated_at, last_validation_reasoning)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               last_validation_reasoning)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [
         id,
         `${tag}-topic-${suffix}`,
@@ -62,7 +75,6 @@ describe("session context briefing", () => {
         projectId,
         opts.validated === false || opts.flagged ? 0 : 1,
         opts.confidence ?? 8,
-        opts.flagged ? new Date().toISOString() : null,
         opts.flagged ?? null,
       ],
     });
@@ -164,5 +176,85 @@ describe("session context briefing", () => {
     );
     expect(md).toContain("none matched hint");
     expect(md).toContain(`/nope/${tag}/ghost`);
+  }, 30000);
+
+  // Bug 1: never-validated snippets were reported as "Flagged by Sentinel"
+  // because the schema defaults last_validated_at to CURRENT_TIMESTAMP.
+  test("a freshly saved, never-validated snippet is NOT flagged", async () => {
+    const projA = await seedProject("fresh", `/tmp/${tag}-fresh`);
+    const freshId = crypto.randomUUID();
+    await client.execute({
+      sql: "INSERT INTO technical_knowledge (id, topic, content, category, project_id) VALUES (?, ?, ?, ?, ?)",
+      args: [freshId, `${tag}-topic-unchecked`, "never validated", "Project Context", projA],
+    });
+
+    const row = await client.execute({
+      sql: "SELECT last_validated_at FROM technical_knowledge WHERE id = ?",
+      args: [freshId],
+    });
+    expect(row.rows[0].last_validated_at).not.toBeNull();
+
+    const briefing = await buildSessionBriefing({ projectId: projA });
+    expect(briefing.outdated.some((o) => o.id === freshId)).toBe(false);
+    expect(briefing.stats.flagged_outdated).toBe(0);
+  }, 60000);
+
+  // Bug 2: project facts saved without a project_id never reached the briefing.
+  test("resolveSnippetProjectId: explicit hint scopes any category", async () => {
+    const pid = await seedProject("snip", `/tmp/${tag}-snip`);
+    expect(await resolveSnippetProjectId("Backend", { projectId: pid })).toBe(pid);
+    expect(await resolveSnippetProjectId("Project Context", { projectName: `${tag}-snip` })).toBe(pid);
+  }, 30000);
+
+  test("resolveSnippetProjectId: no hint keeps generic categories generic", async () => {
+    expect(await resolveSnippetProjectId("Backend", {}, { allowCwdFallback: true })).toBeNull();
+  }, 30000);
+
+  test("resolveSnippetProjectId: unmatched hint yields null, never a guess", async () => {
+    expect(await resolveSnippetProjectId("Project Context", { projectId: `${tag}-missing` })).toBeNull();
+  }, 30000);
+
+  test("a snippet saved with the briefing's project id shows up in the next briefing", async () => {
+    const pid = await seedProject("loop", `/tmp/${tag}-loop`);
+    const scoped = await resolveSnippetProjectId("Project Context", { projectId: pid });
+    const id = crypto.randomUUID();
+    await client.execute({
+      sql: "INSERT INTO technical_knowledge (id, topic, content, category, project_id) VALUES (?, ?, ?, ?, ?)",
+      args: [id, `${tag}-topic-saved-mid-session`, "a fact", "Project Context", scoped],
+    });
+
+    const briefing = await buildSessionBriefing({ projectId: pid });
+    expect(briefing.project_knowledge.map((k) => k.id)).toContain(id);
+  }, 60000);
+
+  // Bug 3: on the shared SSE server, hint-less writes fell back to the
+  // server's own directory and were filed under the wrong project.
+  test("resolveProjectHint: no hint + cwd fallback disabled → no project", async () => {
+    const { project, unresolvedHint } = await resolveProjectHint({}, { allowCwdFallback: false });
+    expect(project).toBeNull();
+    expect(unresolvedHint).toBeNull();
+  }, 30000);
+
+  test("in SSE mode a hint-less observation is stored generic, not under the server's project", async () => {
+    const prev = process.env.MCP_TRANSPORT;
+    process.env.MCP_TRANSPORT = "sse";
+    try {
+      const { id, project } = await recordObservation({ title: `${tag} hintless`, body: "from a remote client" });
+      expect(project).toBeNull();
+      const row = await client.execute({ sql: "SELECT project_id FROM observations WHERE id = ?", args: [id] });
+      expect(row.rows[0].project_id).toBeNull();
+    } finally {
+      if (prev === undefined) delete process.env.MCP_TRANSPORT;
+      else process.env.MCP_TRANSPORT = prev;
+    }
+  }, 30000);
+
+  test("capture guidance tells agents to pass the briefing's project id", async () => {
+    const pid = await seedProject("guide", `/tmp/${tag}-guide`);
+    const briefing = await buildSessionBriefing({ projectId: pid });
+
+    expect(briefing.guidance).toContain(`projectId: "${pid}"`);
+    expect(renderBriefingMarkdown(briefing)).toContain(pid);
+    expect(buildCaptureGuidance(null)).toContain("projectPath");
   }, 30000);
 });

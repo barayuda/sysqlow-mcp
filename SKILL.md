@@ -31,8 +31,8 @@ SysQlow is the developer's persistent, cross-agent memory. Sessions in Claude Co
 
 1. **START — load memory:** call `get_session_context { projectPath: "<workspace-root>" }` as your first sysqlow call. It returns a compact briefing (project identity, top knowledge, recent session activity, Sentinel-flagged items) plus this protocol. Zero LLM quota — it's pure DB reads. (Also available as the `session_context` MCP prompt and `knowledge_workflow { intent: "context" }`.)
 2. **DURING — search before deriving:** `knowledge_workflow { intent: "semantic", query }` before re-researching anything.
-3. **DURING — save as you go:** durable facts via `knowledge_workflow { intent: "save" }`; session events (decisions, bug fixes, discoveries) via `record_observation { kind, title, body }`.
-4. **END — hand off:** before a long session ends, record `record_observation { kind: "session_summary", title, body }` describing what changed and why. The next agent — in any IDE — starts from your summary.
+3. **DURING — save as you go:** durable facts via `knowledge_workflow { intent: "save", projectId }`; session events (decisions, bug fixes, discoveries) via `record_observation { kind, title, body, projectId }`. **Always pass the `projectId` shown in the briefing** — on a shared server, a write without a project hint is stored as generic (not tied to your project).
+4. **END — hand off:** before a long session ends, record `record_observation { kind: "session_summary", title, body, projectId }` describing what changed and why. The next agent — in any IDE — starts from your summary.
 
 Semantic memory (`technical_knowledge`) holds timeless facts; episodic memory (`observations`) holds what happened when. The briefing merges both.
 
@@ -69,7 +69,7 @@ This mirrors the output of `learn_codebase` but shifts the synthesis from sysqlo
 
 ### 3. Session Memory: `get_session_context`, `record_observation`, `get_timeline`
 *   **`get_session_context { projectPath?, projectId?, projectName?, maxItems?, format? }`** — the session-start briefing (see the Session Memory Protocol above). Pass `projectPath` when you know your workspace root; on Docker/remote servers where the path isn't mounted, pass `projectName` instead. `format: "json"` returns the structured object.
-*   **`record_observation { title, body, kind?, sessionId?, agent?, files? }`** — write one episodic event. Set `agent` to your client name (e.g. `"claude-code"`, `"cursor"`) so the timeline shows who did what.
+*   **`record_observation { title, body, kind?, projectId?, sessionId?, agent?, files? }`** — write one episodic event. Set `agent` to your client name (e.g. `"claude-code"`, `"cursor"`) so the timeline shows who did what.
 *   **`get_timeline { limit?, kind?, sinceDays? }`** — newest-first event log; answers "what happened last session?" without any LLM call.
 
 ### 4. Triage: `list_outdated_knowledge`

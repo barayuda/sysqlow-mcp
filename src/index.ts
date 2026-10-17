@@ -9,7 +9,7 @@ import { generateEmbedding, extractDocumentationWithLLM } from "./llm";
 import { QuotaExhaustedError, getBudgetSnapshot, setBudgetConfig } from "./llm-budget";
 import { cosineSimilarity } from "./search";
 import { detectCurrentProject, mergeProjects, reassignProject, auditStructural, auditSemantic, applySuggestions, discoverRelations, runBackgroundCoherence, _stashSuggestions, _loadSuggestions } from "./coherence";
-import { buildSessionBriefing, renderBriefingMarkdown } from "./context";
+import { buildSessionBriefing, renderBriefingMarkdown, resolveSnippetProjectId, FLAGGED_OUTDATED_SQL } from "./context";
 import { recordObservation, getTimeline, OBSERVATION_KINDS } from "./observations";
 
 // 0. Intercept console logs to populate in-memory logs ring buffer for the admin dashboard
@@ -170,6 +170,9 @@ server.addTool({
     topic: z.string().describe("The subject of the technical knowledge (e.g., 'Laravel Rate Limiting')"),
     content: z.string().describe("The actual technical snippet, command, code block, or explanation"),
     category: z.string().optional().describe("Optional category to organize knowledge (e.g., 'Backend', 'Frontend', 'DevOps')"),
+    projectId: z.string().optional().describe("Project UUID to scope this snippet to (from get_session_context). Scopes the snippet regardless of category."),
+    projectPath: z.string().optional().describe("Workspace root to scope this snippet to, when the project id isn't known."),
+    projectName: z.string().optional().describe("Project name fallback when the path isn't visible to the server."),
   }),
   execute: async (args) => {
     const id = crypto.randomUUID();
@@ -177,16 +180,11 @@ server.addTool({
     const content = args.content.trim();
     const category = normalizeCategory(args.category);
 
-    // Resolve project scope: Project Context snippets are scoped to the current workspace,
-    // everything else stays generic unless the caller passes an explicit project_id.
     let resolvedProjectId: string | null = null;
-    if (category === "Project Context") {
-      try {
-        const proj = await detectCurrentProject();
-        resolvedProjectId = proj.id;
-      } catch (err: any) {
-        console.error(`detectCurrentProject failed in store_knowledge: ${err.message}`);
-      }
+    try {
+      resolvedProjectId = await resolveSnippetProjectId(category, args);
+    } catch (err: any) {
+      console.error(`Project resolution failed in store_knowledge: ${err.message}`);
     }
 
     try {
@@ -209,7 +207,8 @@ server.addTool({
         message: `Technical snippet stored successfully. ${formatCategoryGuidance()}`,
         id,
         topic,
-        category
+        category,
+        project_id: resolvedProjectId
       }, null, 2);
     } catch (error: any) {
       console.error(`Error in store_knowledge: ${error.message}`);
@@ -1088,7 +1087,7 @@ server.addTool({
     projectId: z.string().optional().describe("If set, restrict to snippets belonging to this project."),
   }),
   execute: async ({ limit, projectId }) => {
-    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const filters: string[] = [FLAGGED_OUTDATED_SQL];
     const args: any[] = [];
     if (projectId) {
       filters.push("project_id = ?");
@@ -1205,7 +1204,9 @@ server.addTool({
   description: "High-level orchestration tool for common intents: analyze/learn, save/store, find/search, audit/validate, and apply/commit.",
   parameters: z.object({
     intent: z.enum(["context", "learn", "save", "observe", "search", "validate", "apply", "list", "delete", "merge", "semantic", "import"]).describe("Workflow intent to execute."),
-    projectPath: z.string().optional().describe("Used by intent=learn, intent=context, and intent=observe."),
+    projectPath: z.string().optional().describe("Workspace root. Used by intent=learn, and as a project hint by intent=context, save, and observe."),
+    projectId: z.string().optional().describe("Project UUID (from the session briefing). Project hint for intent=context, save, and observe — preferred on a shared server."),
+    projectName: z.string().optional().describe("Project name fallback hint for intent=context, save, and observe."),
     topic: z.string().optional().describe("Used by intent=save (snippet topic) and intent=observe (event title)."),
     content: z.string().optional().describe("Used by intent=save, intent=apply, and intent=observe (event body)."),
     kind: z.enum(OBSERVATION_KINDS).optional().describe("Used by intent=observe. Defaults to 'note'."),
@@ -1222,8 +1223,14 @@ server.addTool({
     const intent = args.intent;
 
     try {
+      const projectHint = {
+        projectId: args.projectId,
+        projectPath: args.projectPath,
+        projectName: args.projectName,
+      };
+
       if (intent === "context") {
-        const briefing = await buildSessionBriefing({ projectPath: args.projectPath });
+        const briefing = await buildSessionBriefing(projectHint);
         return renderBriefingMarkdown(briefing);
       }
 
@@ -1235,10 +1242,10 @@ server.addTool({
           }, null, 2);
         }
         const { id, project } = await recordObservation({
+          ...projectHint,
           title: args.topic,
           body: args.content,
           kind: args.kind,
-          projectPath: args.projectPath,
         });
         return JSON.stringify({
           status: "success",
@@ -1278,10 +1285,11 @@ server.addTool({
         const topic = args.topic.trim();
         const content = args.content.trim();
         const category = normalizeCategory(args.category);
+        const projectId = await resolveSnippetProjectId(category, projectHint);
 
         await client.execute({
-          sql: `INSERT INTO technical_knowledge (id, topic, content, category) VALUES (?, ?, ?, ?)`,
-          args: [id, topic, content, category],
+          sql: `INSERT INTO technical_knowledge (id, topic, content, category, project_id) VALUES (?, ?, ?, ?, ?)`,
+          args: [id, topic, content, category, projectId],
         });
 
         // Generate embedding in the background
@@ -1297,6 +1305,7 @@ server.addTool({
           id,
           topic,
           category,
+          project_id: projectId,
           guidance: formatCategoryGuidance()
         }, null, 2);
       }
@@ -2106,7 +2115,7 @@ app.get("/api/outdated", async (c) => {
     const limit = Math.min(200, Math.max(1, isNaN(limitParam) ? 50 : limitParam));
     const projectId = c.req.query("project_id");
 
-    const filters: string[] = ["is_validated = 0", "last_validated_at IS NOT NULL"];
+    const filters: string[] = [FLAGGED_OUTDATED_SQL];
     const args: any[] = [];
     if (projectId) {
       filters.push("project_id = ?");

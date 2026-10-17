@@ -300,7 +300,7 @@ If you watch the dashboard during this, the node's color shifts from amber (pend
 | `commit_update` | "apply that update", "commit the diff" | Persists an approved update + re-validates by default |
 | `delete_knowledge` | "delete snippet X" | Removes a snippet (cascades through FTS, embeddings, relations) |
 | `merge_knowledge` | "merge snippet A into B" | Combines two snippets, keeps the canonical one |
-| `list_outdated_knowledge` *(new)* | "show what the validator flagged overnight", "triage outdated snippets" | Returns snippets where Sentinel set `is_validated=0` with `last_validated_at IS NOT NULL`; includes the persisted reasoning + suggested diff. Same data is also available as `GET /api/outdated` in SSE mode. |
+| `list_outdated_knowledge` *(new)* | "show what the validator flagged overnight", "triage outdated snippets" | Returns snippets where Sentinel set `is_validated=0` and persisted a validation reasoning (`last_validation_reasoning IS NOT NULL`); includes the persisted reasoning + suggested diff. Same data is also available as `GET /api/outdated` in SSE mode. |
 | `knowledge_workflow` | high-level intent prompts | Router for save/search/validate/apply/delete/merge/semantic/import |
 | `import_documentation` | "scrape and save these docs" | Fetches a URL, LLM-extracts as Markdown, stores |
 | `audit_coherence` | "audit the databank", "run coherence checks" | Three-phase audit: structural / semantic / relation re-discovery |

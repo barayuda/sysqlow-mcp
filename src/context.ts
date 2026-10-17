@@ -70,18 +70,48 @@ export type SessionBriefing = {
 };
 
 /**
+ * SQL predicate for "Sentinel checked this snippet and rejected it".
+ *
+ * Keyed on last_validation_reasoning, not last_validated_at: the schema
+ * defaults last_validated_at to CURRENT_TIMESTAMP, so every never-validated
+ * row has it set. Sentinel always writes a reasoning when it rejects a
+ * snippet (outdated, incorrect, unverifiable) and clears it on up_to_date.
+ */
+export const FLAGGED_OUTDATED_SQL = "is_validated = 0 AND last_validation_reasoning IS NOT NULL";
+
+/**
  * The capture protocol handed to every agent alongside the briefing. This is
  * what turns a passive knowledge base into a cross-client memory: every agent
  * that reads the briefing also learns how to write back into it.
+ *
+ * When the project is known, the protocol embeds its id so every write lands
+ * in the same project the briefing came from. On a shared SSE server the
+ * server cannot see the client's workspace, so the id is the only reliable key.
  */
-export const CAPTURE_GUIDANCE = [
-  "You are connected to SysQlow, this developer's persistent cross-agent knowledge bank. During this session:",
-  '- SEARCH FIRST: before re-deriving project facts or researching a topic, call `knowledge_workflow { intent: "semantic", query }`.',
-  '- SAVE AS YOU GO: when the user teaches you something, a decision is made, or you discover a non-obvious fact, call `knowledge_workflow { intent: "save", topic, content, category }`. Use category "Project Context" for project-specific facts (they auto-scope to this project); Backend/Frontend/DevOps/Database/Testing/Tooling for reusable knowledge.',
-  '- RECORD EVENTS: after a decision, bug fix, or discovery, call `record_observation { kind, title, body }` (kinds: decision, bugfix, discovery, change, note).',
-  '- END OF SESSION: before a long session ends, record one `record_observation { kind: "session_summary", title, body }` covering what changed and why — the next agent (in any IDE) starts from it.',
-  "- Knowledge you save here is shared with every other AI agent the developer uses.",
-].join("\n");
+export function buildCaptureGuidance(project: Project | null): string {
+  const scopeArg = project ? `projectId: "${project.id}"` : "projectPath: \"<your workspace root>\"";
+  return [
+    "You are connected to SysQlow, this developer's persistent cross-agent knowledge bank. During this session:",
+    project
+      ? `- SCOPE EVERY WRITE: pass \`${scopeArg}\` (project "${project.name}") on every save and record_observation call.`
+      : `- SCOPE EVERY WRITE: pass \`${scopeArg}\` on every save and record_observation call, so it lands in the right project.`,
+    '- SEARCH FIRST: before re-deriving project facts or researching a topic, call `knowledge_workflow { intent: "semantic", query }`.',
+    `- SAVE AS YOU GO: when the user teaches you something, a decision is made, or you discover a non-obvious fact, call \`knowledge_workflow { intent: "save", topic, content, category, ${scopeArg} }\`. Use category "Project Context" for project-specific facts; Backend/Frontend/DevOps/Database/Testing/Tooling for reusable knowledge.`,
+    `- RECORD EVENTS: after a decision, bug fix, or discovery, call \`record_observation { kind, title, body, ${scopeArg} }\` (kinds: decision, bugfix, discovery, change, note).`,
+    `- END OF SESSION: before a long session ends, record one \`record_observation { kind: "session_summary", title, body, ${scopeArg} }\` covering what changed and why — the next agent (in any IDE) starts from it.`,
+    "- Knowledge you save here is shared with every other AI agent the developer uses.",
+  ].join("\n");
+}
+
+/**
+ * Whether a call with no project hint may fall back to the server's own
+ * working directory. True for stdio (the server is spawned inside the
+ * client's workspace); false for the shared SSE server, where the server's
+ * directory says nothing about which project the remote client is in.
+ */
+export function defaultAllowCwdFallback(): boolean {
+  return process.env.MCP_TRANSPORT !== "sse";
+}
 
 const MAX_ITEMS_CEILING = 25;
 const CONTENT_TRUNCATE = 600;
@@ -108,9 +138,14 @@ function rowToProject(r: any): Project {
  * server, "which project?" must not be answered with "whatever directory the
  * server happens to run in" when a remote client asked about a path that only
  * exists on the client's machine. No hints at all = stdio-style local
- * detection via detectCurrentProject().
+ * detection via detectCurrentProject(), unless allowCwdFallback is false
+ * (shared SSE server), in which case no project is returned.
  */
-export async function resolveProjectHint(hint: ProjectHint): Promise<{ project: Project | null; unresolvedHint: string | null }> {
+export async function resolveProjectHint(
+  hint: ProjectHint,
+  opts: { allowCwdFallback?: boolean } = {},
+): Promise<{ project: Project | null; unresolvedHint: string | null }> {
+  const allowCwdFallback = opts.allowCwdFallback ?? defaultAllowCwdFallback();
   const path = hint.projectPath?.trim();
   const name = hint.projectName?.trim();
   const hasHint = Boolean(hint.projectId || path || name);
@@ -154,12 +189,35 @@ export async function resolveProjectHint(hint: ProjectHint): Promise<{ project: 
     return { project: null, unresolvedHint: hint.projectId ?? path ?? name ?? null };
   }
 
+  if (!allowCwdFallback) {
+    return { project: null, unresolvedHint: null };
+  }
+
   try {
     return { project: await detectCurrentProject(), unresolvedHint: null };
   } catch (err: any) {
     console.error(`[Context Warn] detectCurrentProject failed: ${err.message}`);
     return { project: null, unresolvedHint: null };
   }
+}
+
+/**
+ * Decide which project a new knowledge snippet belongs to.
+ *
+ * An explicit hint scopes the snippet to that project whatever its category.
+ * Without a hint, only "Project Context" snippets are scoped (to the
+ * detected project); everything else stays generic. An explicit hint that
+ * matches no project yields null rather than a guess.
+ */
+export async function resolveSnippetProjectId(
+  category: string | null,
+  hint: ProjectHint,
+  opts: { allowCwdFallback?: boolean } = {},
+): Promise<string | null> {
+  const hasHint = Boolean(hint.projectId || hint.projectPath?.trim() || hint.projectName?.trim());
+  if (!hasHint && category !== "Project Context") return null;
+  const { project } = await resolveProjectHint(hint, opts);
+  return project?.id ?? null;
 }
 
 export async function buildSessionBriefing(opts: ProjectHint & { maxItems?: number } = {}): Promise<SessionBriefing> {
@@ -173,7 +231,7 @@ export async function buildSessionBriefing(opts: ProjectHint & { maxItems?: numb
   const statsRes = await client.execute({
     sql: `SELECT COUNT(*) AS total,
                  COALESCE(SUM(CASE WHEN is_validated = 1 THEN 1 ELSE 0 END), 0) AS validated,
-                 COALESCE(SUM(CASE WHEN is_validated = 0 AND last_validated_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS flagged,
+                 COALESCE(SUM(CASE WHEN ${FLAGGED_OUTDATED_SQL} THEN 1 ELSE 0 END), 0) AS flagged,
                  COALESCE(SUM(CASE WHEN project_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS project_scoped
           FROM technical_knowledge WHERE ${scopeWhere}`,
     args: scopeArgs,
@@ -274,7 +332,7 @@ export async function buildSessionBriefing(opts: ProjectHint & { maxItems?: numb
   const outdatedRes = await client.execute({
     sql: `SELECT id, topic, last_validation_reasoning
           FROM technical_knowledge
-          WHERE ${scopeWhere} AND is_validated = 0 AND last_validated_at IS NOT NULL
+          WHERE ${scopeWhere} AND ${FLAGGED_OUTDATED_SQL}
           ORDER BY last_validated_at DESC LIMIT 5`,
     args: scopeArgs,
   });
@@ -293,7 +351,7 @@ export async function buildSessionBriefing(opts: ProjectHint & { maxItems?: numb
     recent,
     recent_observations: recentObservations,
     outdated,
-    guidance: CAPTURE_GUIDANCE,
+    guidance: buildCaptureGuidance(project),
   };
 }
 
@@ -311,14 +369,17 @@ export function renderBriefingMarkdown(b: SessionBriefing): string {
       if (Array.isArray(terms) && terms.length > 0) stack = ` — stack: ${terms.join(", ")}`;
     } catch { /* unparseable stack — omit */ }
     const root = b.project.root_path ? ` (\`${b.project.root_path}\`)` : "";
-    lines.push(`**Project:** ${b.project.name}${root}${stack}`);
+    lines.push(`**Project:** ${b.project.name}${root}${stack} — id \`${b.project.id}\``);
   } else if (b.unresolved_hint) {
     lines.push(
       `**Project:** none matched hint \`${b.unresolved_hint}\` — showing generic knowledge only. ` +
       `Pass \`projectName\` (see the \`projects\` this bank knows) or call from within the workspace to register it.`
     );
   } else {
-    lines.push("**Project:** none detected — showing generic knowledge only.");
+    lines.push(
+      "**Project:** none detected — showing generic knowledge only. " +
+      "Call again with `projectPath` (your workspace root) or `projectName` to load project memory."
+    );
   }
 
   lines.push(
